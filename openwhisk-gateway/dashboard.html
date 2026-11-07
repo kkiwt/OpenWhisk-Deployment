@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Serverless API Gateway Dashboard</title>
+    <!-- Nhúng Tailwind CSS để giao diện tự đẹp mà không cần viết CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-white min-h-screen p-8 font-sans">
+
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                    K3s Serverless Gateway
+                </h1>
+                <p class="text-slate-400 mt-2">Hệ tính toán phân bố - Cân bằng tải đa cụm qua Tailscale</p>
+            </div>
+
+            <!-- Cấu hình tổng quan -->
+            <div id="config-panel" class="flex gap-4">
+                <!-- Nội dung config sẽ được JS đổ vào đây -->
+            </div>
+        </div>
+
+        <!-- Lưới hiển thị các cụm máy chủ -->
+        <div id="nodes-grid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <p class="text-slate-500 animate-pulse">Đang kết nối đến Gateway...</p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+
+        // Hàm gọi API để bật/tắt chế độ bảo trì khi click vào nút
+        async function toggleMaintenance(name, currentAvailable) {
+            try {
+                await fetch(`${API_URL}/admin/clusters/${name}/toggle?available=${!currentAvailable}`, {
+                    method: 'POST'
+                });
+                fetchDashboard(); // Tải lại giao diện ngay lập tức
+            } catch (error) {
+                alert("Lỗi kết nối! Hãy chắc chắn Gateway đang chạy.");
+            }
+        }
+
+        // Hàm gọi API lấy dữ liệu và vẽ giao diện
+        async function fetchDashboard() {
+            try {
+                const res = await fetch(`${API_URL}/admin/clusters`);
+                const data = await res.json();
+
+                // Vẽ bảng Config
+                document.getElementById('config-panel').innerHTML = `
+                    <div class="px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg shadow">
+                        <span class="text-slate-400 text-sm">Thuật toán LB</span><br>
+                        <span class="font-bold text-yellow-400 text-lg uppercase">${data.config.policy}</span>
+                    </div>
+                    <div class="px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg shadow">
+                        <span class="text-slate-400 text-sm">Action Ping</span><br>
+                        <span class="font-bold text-cyan-400 text-lg">${data.config.probe_action}</span>
+                    </div>
+                `;
+
+                // Vẽ các thẻ Card cho từng Node K3s
+                let html = "";
+                for (const [name, info] of Object.entries(data.nodes)) {
+                    // Logic màu sắc trạng thái mạng
+                    const isUp = info.up;
+                    const upColor = isUp ? "text-emerald-400" : "text-rose-500";
+                    const upIcon = isUp ? "✅ Đang chạy" : "❌ Mất kết nối";
+                    const glowEffect = isUp && info.available ? "shadow-[0_0_15px_rgba(52,211,153,0.2)] border-emerald-500/50" : "border-rose-500/50";
+
+                    // Logic màu sắc nút Bảo trì
+                    const btnColor = info.available
+                        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500 hover:text-white"
+                        : "bg-orange-500 text-white hover:bg-orange-600 shadow-lg shadow-orange-500/30";
+                    const btnText = info.available ? "Tạm dừng (Bảo trì)" : "▶ Mở khóa hoạt động";
+
+                    html += `
+                        <div class="bg-slate-800 border-t-4 ${glowEffect} rounded-xl p-6 transition-all duration-300 relative overflow-hidden">
+                            <div class="flex justify-between items-center mb-6">
+                                <h2 class="text-3xl font-black uppercase text-slate-100">${name}</h2>
+                                <span class="${upColor} font-semibold flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-full text-sm">
+                                    ${upIcon}
+                                </span>
+                            </div>
+
+                            <div class="space-y-3 text-sm text-slate-300 mb-8">
+                                <div class="flex justify-between border-b border-slate-700 pb-2">
+                                    <span>Độ trễ Ping:</span>
+                                    <span class="text-yellow-400 font-mono font-bold">${info.ewma_ms} ms</span>
+                                </div>
+                                <div class="flex justify-between border-b border-slate-700 pb-2">
+                                    <span>Ping lỗi liên tục:</span>
+                                    <span class="${info.fails > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'} font-mono">${info.fails} lần</span>
+                                </div>
+                                <div class="pt-2">
+                                    <span class="block text-slate-500 mb-1">Tailscale Address:</span>
+                                    <span class="font-mono text-xs text-blue-300 break-all bg-slate-900 px-2 py-1 rounded block">${info.url}</span>
+                                </div>
+                            </div>
+
+                            <button onclick="toggleMaintenance('${name}', ${info.available})"
+                                    class="w-full py-3 rounded-lg font-bold transition-all duration-200 ${btnColor}">
+                                ${btnText}
+                            </button>
+                        </div>
+                    `;
+                }
+                document.getElementById('nodes-grid').innerHTML = html;
+            } catch (error) {
+                document.getElementById('nodes-grid').innerHTML = `
+                    <div class="col-span-3 text-center py-10 bg-slate-800 rounded-xl border border-rose-500/50">
+                        <span class="text-4xl">🔌</span>
+                        <h3 class="text-rose-400 text-xl font-bold mt-4">Không thể kết nối tới API Gateway</h3>
+                        <p class="text-slate-400 mt-2">Vui lòng kiểm tra lại xem file gateway.py đã chạy chưa (./start.sh)</p>
+                    </div>`;
+            }
+        }
+
+        // Tự động load ngay khi mở web và lặp lại mỗi 1 giây
+        fetchDashboard();
+        setInterval(fetchDashboard, 1000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+# =====================================================================
+#  golden-values.yaml  -  GOLDEN CONFIG dùng chung cho 3 cụm OpenWhisk (c1, c2, c3)
+#  Tên khóa lấy từ helm/openwhisk/values.yaml của openwhisk-deploy-kube.
+#  KHÔNG sửa riêng từng máy. Muốn đổi thì cả nhóm đổi cùng lúc.
+#  File này được CaiDatOpenWhiskMoiHon.sh (ở Desktop) dùng trực tiếp khi helm install.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# [Mạng] Cổng vào cho Gateway. Chạy trên K3s nên dùng NodePort 31001.
+# apiHostName KHÁC NHAU mỗi máy (IP Tailscale 100.x.x.x) nên KHÔNG ghi cứng
+# ở đây: CaiDatOpenWhiskMoiHon.sh tự lấy bằng `tailscale ip -4` rồi truyền bằng --set.
+# (Nếu chạy helm tay thì phải tự thêm: --set whisk.ingress.apiHostName=100.x.x.x)
+# ---------------------------------------------------------------------
+whisk:
+  ingress:
+    type: NodePort
+    apiHostName: ""
+    apiHostPort: 31001
+    apiHostProto: "https"
+
+  # -------------------------------------------------------------------
+  # [VIỆC 2] NÂNG GIỚI HẠN SỐ LẦN GỌI  -> hết lỗi 429 Too Many Requests
+  # Mặc định chart chỉ cho 60 lần/phút và 30 lần đồng thời.
+  # K6 bắn tới 160 đơn/giây (= 9.600 lần/phút) nên phải nâng rất cao.
+  # -------------------------------------------------------------------
+  limits:
+    actionsInvokesPerminute: 600000
+    actionsInvokesConcurrent: 5000
+    triggersFiresPerminute: 600000
+    actions:
+      memory:
+        std: "128m"     # mỗi action mặc định 128 MB -> 2048m / 128m = 16 chỗ (khớp file v3)
+
+  # [VIỆC 1 - một phần] Tổng RAM các container action mà MỖI invoker được tạo.
+  # 2048m / 128m = 16 chỗ mỗi invoker. Đây là trần xếp chỗ, RAM thật dùng ít hơn.
+  containerPool:
+    userMemory: "2048m"
+
+# ---------------------------------------------------------------------
+# [VIỆC 3] LƯU BỀN (đã đổi theo đề xuất của nhóm trưởng)
+#   enabled: true                 -> tạo PersistentVolumeClaim cho CouchDB, Kafka,
+#                                    ZooKeeper, Redis thay vì emptyDir
+#   hasDefaultStorageClass: true  -> dùng StorageClass mặc định của cụm.
+#                                    k3d có sẵn "local-path" làm mặc định nên không cần khai báo thêm.
+#   explicitStorageClass: null    -> chỉ cần khi cụm KHÔNG có StorageClass mặc định
+# Hệ quả: tắt/mở máy ảo hoặc pod CouchDB khởi động lại thì action, mốc khởi tạo
+# (ow_kube_couchdb_initialized_marker) vẫn còn -> không phải cài lại sau mỗi lần mở máy.
+# Dữ liệu chỉ mất khi xóa cụm k3d (XoaOpenWhiskDeCaiLai.sh) hoặc --redeploy --clean.
+# ---------------------------------------------------------------------
+k8s:
+  persistence:
+    enabled: true
+    hasDefaultStorageClass: true
+    explicitStorageClass: null
+
+# ---------------------------------------------------------------------
+# [VIỆC 4] GHIM PHIÊN BẢN IMAGE (chart được ghim riêng bằng golden.lock)
+# Ghi rõ tag, không dùng "latest".
+# ---------------------------------------------------------------------
+utility:
+  imageName: "openwhisk/ow-utils"
+  imageTag: "ef725a6"
+
+zookeeper:
+  imageName: "zookeeper"
+  imageTag: "3.4"
+
+kafka:
+  imageName: "wurstmeister/kafka"
+  imageTag: "2.12-2.3.1"
+
+db:
+  imageName: "apache/couchdb"
+  imageTag: "2.3"
+
+nginx:
+  imageName: "nginx"
+  imageTag: "1.21.1"
+  httpsNodePort: 31001          # cổng Gateway gọi vào
+
+controller:
+  imageName: "openwhisk/controller"
+  imageTag: "ef725a6"
+  jvmHeapMB: "896"              # [VIỆC 1] heap JVM của Controller (trần pod 1536Mi)
+
+invoker:
+  imageName: "openwhisk/invoker"
+  imageTag: "ef725a6"
+  jvmHeapMB: "512"              # [VIỆC 1] heap JVM của Invoker (trần pod 1024Mi)
+  containerFactory:
+    impl: "kubernetes"          # K3s dùng containerd -> KHÔNG dùng kiểu "docker"
+    kubernetes:
+      replicaCount: 2           # 2 invoker (cụm k3d có 2 agent)
+  kubernetes:
+    replicaCount: 2             # chart bản nào dùng khóa nào cũng đều ra 2
+
+apigw:
+  imageName: "openwhisk/apigateway"
+  imageTag: "1.0.0"
+
+redis:
+  imageName: "redis"
+  imageTag: "4.0"
+
+busybox:
+  imageName: "busybox"
+  imageTag: "1.36.1"
+
+# ---------------------------------------------------------------------
+# [VIỆC 1 - phần còn lại] KHÓA TRẦN RAM CHO POD
+# Chart KHÔNG có khóa "resources" cho controller/invoker/kafka/couchdb,
+# nên không ghi được ở file này. Trần RAM pod do CaiDatOpenWhiskMoiHon.sh
+# đặt ngay sau helm (kubectl set resources). Bảng trần nằm ở đầu file đó.
+# ---------------------------------------------------------------------

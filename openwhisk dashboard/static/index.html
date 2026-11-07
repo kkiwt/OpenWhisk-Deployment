@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0a1020" />
+  <title>OpenWhisk · Result Station</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Điều hướng">
+      <a class="brand" href="/" aria-label="OpenWhisk Dashboard">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>OpenWhisk</strong><small>RESULT STATION</small></span>
+      </a>
+      <div class="side-section-label">WORKSPACE</div>
+      <nav class="side-nav">
+        <a class="nav-item current" href="#overview"><span class="nav-icon">▦</span> Tổng quan</a>
+        <a class="nav-item" href="#clusters"><span class="nav-icon">⬡</span> Cụm xử lý</a>
+        <a class="nav-item" href="#activity"><span class="nav-icon">☷</span> Nhật ký kết quả</a>
+      </nav>
+      <div class="side-separator"></div>
+      <div class="side-section-label">DATA PIPELINE</div>
+      <div class="pipeline">
+        <div><span class="pipeline-node cyan"></span> OpenWhisk Actions</div>
+        <span class="pipeline-connector"></span>
+        <div><span class="pipeline-node purple"></span> POST /ingest</div>
+        <span class="pipeline-connector"></span>
+        <div><span class="pipeline-node lime"></span> Live Dashboard</div>
+      </div>
+      <div class="side-bottom"><div class="side-info"><span class="dot green"></span> In-memory collector</div><small>Tối đa 5.000 bản ghi · 1 worker</small></div>
+    </aside>
+
+    <main class="main" id="overview">
+      <header class="topbar">
+        <div class="breadcrumbs">Workspace <span>/</span> <strong>Result Station</strong></div>
+        <div class="top-actions"><span id="clock">--:--:--</span><div id="connection" class="live-pill"><span class="dot green"></span> Kết nối</div></div>
+      </header>
+
+      <div class="content">
+        <div class="page-header">
+          <div><div class="eyebrow"><span class="eyebrow-icon">✦</span> SERVERLESS MULTI-CLUSTER</div><h1>Observed Activations<span class="h1-dot">.</span></h1>
+            <p class="muted">Bản ghi thực do OpenWhisk actions gửi về; số liệu chỉ gồm event đã lấy mẫu, không phải tổng RPS của K6/Gateway.</p>
+          </div>
+          <div class="header-tools"><span class="refresh-note"><span class="ring"></span> Làm mới mỗi 2 giây</span>
+            <select id="windowSelect" aria-label="Chọn khoảng thời gian"><option value="60">60 giây gần nhất</option><option value="300">5 phút gần nhất</option><option value="900">15 phút gần nhất</option></select>
+          </div>
+        </div>
+        <section class="metrics" aria-label="Chỉ số tổng quan">
+          <article class="metric-card"><div class="metric-top"><span>EVENTS RECEIVED</span><span class="metric-icon blue">↗</span></div><div id="metric-total" class="metric-value">—</div><div class="metric-footer"><span class="mini-line blue-line"></span><span>Record thực nhận trong khoảng chọn</span></div></article>
+          <article class="metric-card"><div class="metric-top"><span>INGEST RATE</span><span class="metric-icon teal">≋</span></div><div class="metric-value"><span id="metric-rps">—</span><small>record/s</small></div><div class="metric-footer"><span class="mini-line teal-line"></span><span>Tốc độ nhận event đã lấy mẫu</span></div></article>
+          <article class="metric-card"><div class="metric-top"><span>AVG LATENCY</span><span class="metric-icon purple">◷</span></div><div class="metric-value"><span id="metric-latency">—</span><small>ms</small></div><div class="metric-footer"><span class="mini-line purple-line"></span><span id="metric-p95">P95: — ms</span></div></article>
+          <article class="metric-card"><div class="metric-top"><span>SUCCESS RATE</span><span class="metric-icon mint">✓</span></div><div class="metric-value"><span id="metric-success">—</span><small>%</small></div><div class="metric-footer"><span class="mini-line mint-line"></span><span id="metric-error">Chưa có dữ liệu</span></div></article>
+        </section>
+        <section class="charts-grid">
+          <article class="panel throughput-panel"><div class="panel-heading"><div><div class="panel-kicker">ACTION TELEMETRY</div><h2>Event theo thời gian</h2><p>Số record action gửi mỗi giây, chia theo cụm</p></div><span class="panel-chip">LIVE</span></div><div class="chart-wrap chart-tall"><canvas id="timelineChart" role="img" aria-label="Biểu đồ event nhận được theo thời gian"></canvas></div><div class="legend-row"><span><i class="legend-key c1"></i>Cluster C1</span><span><i class="legend-key c2"></i>Cluster C2</span><span><i class="legend-key c3"></i>Cluster C3</span></div></article>
+          <article class="panel breakdown-panel"><div class="panel-heading"><div><div class="panel-kicker">DISTRIBUTION</div><h2>Yêu cầu theo cụm</h2><p>Tổng bản ghi trong khoảng đã chọn</p></div></div><div class="chart-wrap chart-tall"><canvas id="clusterChart" role="img" aria-label="Biểu đồ cột số yêu cầu theo cụm"></canvas></div><div id="distribution-summary" class="panel-foot">Chưa có bản ghi nào</div></article>
+          <article class="panel latency-panel"><div class="panel-heading"><div><div class="panel-kicker">ACTION EXECUTION</div><h2>Thời gian chạy action</h2><p>Thời gian thực thi bên trong action · ms, không gồm Gateway</p></div></div><div class="chart-wrap chart-medium"><canvas id="latencyChart" role="img" aria-label="Biểu đồ thời gian chạy action theo cụm"></canvas></div></article>
+          <article class="panel mix-panel"><div class="panel-heading"><div><div class="panel-kicker">WORKLOAD MIX</div><h2>Loại action</h2><p>Tỷ trọng các loại tác vụ đã nhận</p></div></div><div class="mix-area"><div class="chart-wrap chart-medium mix-chart"><canvas id="actionChart" role="img" aria-label="Biểu đồ tròn loại action"></canvas></div><div id="action-legend" class="action-legend"><span>Chưa có dữ liệu</span></div></div></article>
+        </section>
+        <section class="clusters-section" id="clusters"><div class="section-title"><div><div class="panel-kicker">CLUSTER INSIGHTS</div><h2>Chi tiết theo cụm</h2></div><span class="subtle">Trạng thái thể hiện dữ liệu nhận được, không phải health check thực tế</span></div><div id="cluster-cards" class="cluster-cards"></div></section>
+        <section class="panel activity-section" id="activity"><div class="panel-heading activity-heading"><div><div class="panel-kicker">EVENT STREAM</div><h2>Kết quả gần đây</h2><p>Các bản ghi mới nhất gửi tới /ingest</p></div><div class="filters"><a class="export-link" href="/api/export.csv" title="Tải các bản ghi thực đã nhận">↓ CSV</a><select id="clusterFilter" aria-label="Lọc cụm"><option value="all">Tất cả cụm</option><option value="c1">Cluster C1</option><option value="c2">Cluster C2</option><option value="c3">Cluster C3</option></select><span id="record-count" class="count-tag">0 / 5.000</span></div></div><div class="table-scroll"><table><thead><tr><th>THỜI GIAN NHẬN</th><th>CLUSTER</th><th>ACTION</th><th>REQ ID</th><th>STATUS</th><th class="numeric">LATENCY</th></tr></thead><tbody id="recent-body"><tr><td colspan="6" class="empty-row">Đang kết nối máy chủ...</td></tr></tbody></table></div></section>
+        <footer class="footer"><span>OpenWhisk Result Station <strong>v1.0</strong> · TV3 / Mảng B</span><span>In-memory · Không lưu bền · <span id="updated-at">Chưa đồng bộ</span></span></footer>
+      </div>
+    </main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

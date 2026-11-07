@@ -1,0 +1,43 @@
+# Copy this file to chaos.conf and fill in the real lab values before use.
+# Do not commit chaos.conf: it contains private Tailscale addresses and SSH users.
+
+CHAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$CHAOS_DIR/.." && pwd)"
+if [ -d "$PROJECT_ROOT/golden-config-final/golden" ]; then
+  DEFAULT_GOLDEN_DIR="$PROJECT_ROOT/golden-config-final/golden"
+else
+  DEFAULT_GOLDEN_DIR="$PROJECT_ROOT/golden"
+fi
+GOLDEN_DIR="${GOLDEN_DIR:-$DEFAULT_GOLDEN_DIR}"
+K6_DIR="${K6_DIR:-$PROJECT_ROOT/k6}"
+
+# Set ME to the local cluster label on this machine: c1, c2, or c3.
+ME="c1"
+
+# Replace each example address with the corresponding machine's Tailscale IP.
+IP_c1="100.x.x.x"
+IP_c2="100.x.x.x"
+IP_c3="100.x.x.x"
+
+# SSH user and Tailscale host for remote F1/F2/F4 operations.
+SSH_c1="user@100.x.x.x"
+SSH_c2="user@100.x.x.x"
+SSH_c3="user@100.x.x.x"
+
+# Keep these aligned with CaiDatOpenWhiskMoi.sh and the cluster's actual names.
+K3D_CLUSTER="openwhisk-cluster"
+AGENT_NODE="k3d-openwhisk-cluster-agent-0"
+NS="openwhisk"
+RELEASE="owdev"
+INVOKER_POD="owdev-invoker-0"
+OW_PORT="31001"
+
+# Fill in the Gateway and Dashboard addresses reachable from this lab machine.
+GATEWAY_URL="http://100.x.x.x:8080"
+REAL_DASHBOARD_URL="http://100.x.x.x:9000"
+BLACKHOLE_URL="http://10.255.255.1:9"
+
+A1_BUSY="0.05"
+A2_BUSY="0.20"
+A3_BUSY="0.50"
+SAMPLE_RATE="0.05"
