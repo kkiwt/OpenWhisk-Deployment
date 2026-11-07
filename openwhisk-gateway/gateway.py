@@ -1,8 +1,10 @@
 import asyncio, itertools, os, random, time, logging
+from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import FileResponse
 
 # --- 1. CẤU HÌNH LOGGING ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%H:%M:%S")
@@ -48,6 +50,11 @@ def build_ring():
     ring = itertools.cycle(list(state.keys()) if state else [])
 
 app = FastAPI(title="OpenWhisk Multi-Cluster Gateway")
+BASE_DIR = Path(__file__).resolve().parent
+
+@app.get("/")
+async def gateway_dashboard():
+    return FileResponse(BASE_DIR / "dashboard.html")
 
 # --- 2. CẤU HÌNH CORS ---
 app.add_middleware(

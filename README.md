@@ -103,34 +103,31 @@ Các flag, quy trình `--redeploy`, giới hạn RAM, kiểm thử và cảnh b�
 
 Gateway chỉ cần chạy một bản trên máy điều phối. Sau khi cài từng cluster, `golden/deploy-actions.sh` tạo file `gateway-line-c1.txt`, `gateway-line-c2.txt` hoặc `gateway-line-c3.txt` có URL và guest credential dạng Base64. Dùng dòng đó để cấu hình biến môi trường; không chép credential vào `gateway.py`.
 
-1. Trên máy Gateway, cấu hình URL và nhập Base64 guest auth trực tiếp vào prompt ẩn. Không paste credential vào file Python, terminal command, README hoặc Git:
+1. Tạo cấu hình riêng trên máy Gateway:
 
-	```bash
-	export ACTIVE=c1,c2,c3
-	export CLUSTER_C1_URL=https://<IP-C1>:31001
-	read -r -s -p 'Base64 guest auth for c1: ' CLUSTER_C1_AUTH_B64; printf '\n'; export CLUSTER_C1_AUTH_B64
-	export CLUSTER_C2_URL=https://<IP-C2>:31001
-	read -r -s -p 'Base64 guest auth for c2: ' CLUSTER_C2_AUTH_B64; printf '\n'; export CLUSTER_C2_AUTH_B64
-	export CLUSTER_C3_URL=https://<IP-C3>:31001
-	read -r -s -p 'Base64 guest auth for c3: ' CLUSTER_C3_AUTH_B64; printf '\n'; export CLUSTER_C3_AUTH_B64
-	```
+   ```bash
+   cd /path/to/OpenWhisk-Deployment/openwhisk-gateway
+   cp .env.example .env
+   chmod 600 .env
+   nano .env
+   ```
 
-	Chỉ nhập các cluster đã deploy xong; đặt `ACTIVE=c1,c2` nếu c3 chưa sẵn sàng. Dùng `gateway-line-cX.txt` làm nguồn URL/auth, nhưng giữ file đó và auth ngoài repo.
+   Điền URL và Base64 guest auth lấy từ `gateway-line-cX.txt` cho từng cluster đã sẵn sàng. Đặt `ACTIVE=c1` nếu hiện chỉ có C1; mở rộng thành `c1,c2,c3` khi đã có đủ ba cấu hình. Đặt `GATEWAY_BIND_HOST` thành IP Tailscale của máy Gateway. File `.env` được Git ignore và được `start.sh` tự nạp.
 2. Khởi chạy:
 
 	```bash
-	cd /path/to/OpenWhisk-Deployment/openwhisk-gateway
 	./start.sh
 	```
 
-	`start.sh` tạo virtualenv nếu chưa có, cài dependencies rồi chạy Uvicorn ở port `8080`. Giữ terminal này hoạt động. Mỗi lần mở terminal mới cần nhập lại biến môi trường; restart Gateway sau khi đổi cấu hình.
-3. Xác nhận Gateway thấy các cluster:
+	`start.sh` tạo virtualenv nếu chưa có, cài dependencies rồi chạy Uvicorn ở port `8080`. Giữ terminal này hoạt động; restart Gateway sau khi đổi `.env`.
+3. Mở giao diện và kiểm tra API:
 
 	```bash
-	curl -s http://127.0.0.1:8080/admin/clusters
+	# Trình duyệt: http://<GATEWAY-TAILSCALE-IP>:8080/
+	curl -s http://<GATEWAY-TAILSCALE-IP>:8080/admin/clusters
 	```
 
-	Khi gọi từ máy khác, thay `127.0.0.1` bằng địa chỉ Gateway trên tailnet.
+	Giao diện `/` dùng cùng origin với API, nên các nút bảo trì gọi đúng Gateway hiện tại.
 
 `gateway.py` đọc `CLUSTER_C1_URL`/`CLUSTER_C1_AUTH_B64` (tương tự c2/c3) từ environment khi khởi động. Nếu chưa cấu hình, cluster đó bị bỏ qua và có warning; `/admin/clusters` chỉ hiện các cluster đã nạp thành công.
 

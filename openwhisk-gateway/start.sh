@@ -10,6 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${VENV_DIR:-$SCRIPT_DIR/venv}"
 cd "$SCRIPT_DIR"
 
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+GATEWAY_BIND_HOST="${GATEWAY_BIND_HOST:-0.0.0.0}"
+GATEWAY_PORT="${GATEWAY_PORT:-8080}"
+
 echo -e "${CYAN}=================================================${NC}"
 echo -e "${CYAN}🚀 KÍCH HOẠT HỆ THỐNG GATEWAY SERVERLESS K3S 🚀${NC}"
 echo -e "${CYAN}=================================================${NC}"
@@ -37,4 +45,4 @@ echo -e "🌍 Bảng điều khiển Web     : ${YELLOW}$SCRIPT_DIR/dashboard.ht
 
 # Khởi chạy Gateway
 echo -e "${CYAN}🌐 Đang khởi chạy Uvicorn Server (Nhấn Ctrl+C để tắt ngầm)...${NC}"
-uvicorn gateway:app --host 0.0.0.0 --port 8080 --workers 1
+uvicorn gateway:app --host "$GATEWAY_BIND_HOST" --port "$GATEWAY_PORT" --workers 1
