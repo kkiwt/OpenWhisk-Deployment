@@ -1,0 +1,123 @@
+# =====================================================================
+#  custom-values.yaml - OpenWhisk trên K3s THẬT: 1 master + 2 worker (CloudFly, Tailscale)
+#
+#  Kế thừa Golden Config của 3 cụm k3d (cùng tag image, cùng giới hạn gọi) để kết quả K6
+#  so sánh công bằng. Chỉ KHÁC ở những chỗ phản ánh phần cứng thật, đều có chú thích bên dưới.
+#
+#  NGÂN SÁCH TÀI NGUYÊN: pod OpenWhisk chỉ chạy trên 2 worker = 8 vCPU / 16 GB
+#  (master bị taint, chỉ chạy control-plane). Mỗi worker còn khoảng 7 GB cho pod sau khi trừ
+#  OS + containerd + k3s-agent + tailscaled (~1 GB).
+#
+#     Thành phần              giới hạn pod   heap JVM   ghi chú
+#     controller x1           2048 Mi        1280 m     (đặt bằng install-openwhisk.sh)
+#     invoker x2              1536 Mi        768 m      mỗi invoker 1 worker
+#     kafka x1                1536 Mi        768 m
+#     zookeeper x1             512 Mi        256-384 m
+#     couchdb x1              1024 Mi        -
+#     nginx/redis/apigw/...   ~600 Mi        -
+#     action container        2 x 3072 Mi (userMemory) = tối đa 48 container x 128 Mi
+#     -> REQUESTS ~ 11,9 GiB < ~14 GiB allocatable: scheduler không bao giờ hết chỗ.
+#  Trần RAM pod KHÔNG đặt được ở file này (chart không có khóa `resources` cho các
+#  thành phần lõi) nên do install-openwhisk.sh đặt ngay sau helm (kubectl set resources).
+# =====================================================================
+
+whisk:
+  ingress:
+    type: NodePort
+    # KHÁC MỖI MÁY: install-openwhisk.sh tự điền IP Tailscale của worker bằng --set.
+    # Giá trị này được bake vào cert của nginx và vào __OW_API_HOST của action
+    # (action tự gọi publish_result qua địa chỉ này), nên PHẢI là IP mà pod tới được.
+    apiHostName: ""
+    apiHostPort: 31001
+    apiHostProto: "https"
+
+  limits:
+    # Chart mặc định 60 lần/phút -> K6 dính 429 ngay. Giữ nguyên số của Golden Config.
+    actionsInvokesPerminute: 600000
+    actionsInvokesConcurrent: 5000
+    triggersFiresPerminute: 600000
+    actions:
+      memory:
+        std: "128m"          # RAM mặc định mỗi action. userMemory/std = số "chỗ" của invoker.
+
+  containerPool:
+    # TRẦN xếp chỗ cho action container của MỖI invoker (RAM thật dùng ít hơn nhiều).
+    # 3072m / 128m = 24 chỗ/invoker, 48 chỗ cả cụm. Tải K6 tối đa ~160 req/s, action ~0,15 s
+    # trung bình -> cần ~25 container đồng thời, dư gấp đôi. Golden k3d dùng 2048m vì
+    # node chỉ 3,25 GB; ở đây worker 8 GB nên nâng lên để cold-start ít bị xếp hàng.
+    userMemory: "3072m"
+
+# ---------------------------------------------------------------------
+# LƯU BỀN: giữ như Golden Config hiện tại của project (PVC bật).
+# K3s có sẵn StorageClass `local-path` làm mặc định -> không cần khai báo thêm.
+# CHÚ Ý riêng cho cụm thật: local-path tạo PV GẮN CỨNG vào node nơi pod chạy lần đầu.
+# Nếu worker chứa CouchDB/Kafka chết (kịch bản F2), pod KHÔNG thể sang worker kia mà phải
+# chờ node quay lại. Đó là hành vi đúng và nên ghi vào báo cáo F2 (khác k3d, nơi mọi
+# thứ cùng một máy vật lý).
+# ---------------------------------------------------------------------
+k8s:
+  persistence:
+    enabled: true
+    hasDefaultStorageClass: true
+    explicitStorageClass: null
+
+# ---------------------------------------------------------------------
+# GHIM PHIÊN BẢN: y hệt Golden Config (chart ghim riêng bằng commit trong install-openwhisk.sh)
+# ---------------------------------------------------------------------
+utility:
+  imageName: "openwhisk/ow-utils"
+  imageTag: "ef725a6"
+
+zookeeper:
+  imageName: "zookeeper"
+  imageTag: "3.4"
+
+kafka:
+  imageName: "wurstmeister/kafka"
+  imageTag: "2.12-2.3.1"
+
+db:
+  imageName: "apache/couchdb"
+  imageTag: "2.3"
+
+nginx:
+  imageName: "nginx"
+  imageTag: "1.21.1"
+  httpsNodePort: 31001          # cổng Gateway/NGINX gọi vào, mở trên MỌI node qua kube-proxy
+
+controller:
+  imageName: "openwhisk/controller"
+  imageTag: "ef725a6"
+  # Heap = ~62% trần pod 2048Mi: phần còn lại cho metaspace, thread, buffer Netty.
+  # Heap sát trần pod thì kernel OOM-kill container dù JVM chưa tràn heap.
+  jvmHeapMB: "1280"
+
+invoker:
+  imageName: "openwhisk/invoker"
+  imageTag: "ef725a6"
+  jvmHeapMB: "768"              # 50% trần pod 1536Mi: invoker còn tự quản lý nhiều kết nối tới action pod
+  containerFactory:
+    # K3s dùng containerd, không có docker.sock -> BẮT BUỘC dùng factory "kubernetes":
+    # invoker tạo mỗi action container thành một pod qua K8s API.
+    impl: "kubernetes"
+    kubernetes:
+      replicaCount: 2           # 1 invoker / worker
+  kubernetes:
+    replicaCount: 2             # khóa này khác nhau giữa các bản chart; đặt cả hai cho chắc
+
+apigw:
+  imageName: "openwhisk/apigateway"
+  imageTag: "1.0.0"
+
+redis:
+  imageName: "redis"
+  imageTag: "4.0"
+
+busybox:
+  imageName: "busybox"
+  imageTag: "1.36.1"
+
+# Không đặt affinity/tolerations: để mặc định của chart. Worker đã mang nhãn
+# openwhisk-role=invoker (do 03-setup-k3s-worker.sh gắn lúc join) và master đã taint
+# nên scheduler chỉ còn 2 worker; thành phần lõi tự rải theo preferred-affinity.
+# Đây đúng là cấu hình đã chạy ổn trên 3 cụm k3d.
