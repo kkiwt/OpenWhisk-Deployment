@@ -104,7 +104,11 @@ cap() {  # cap <tên> <limitMi> <requestMi> <cpuReq> [KEY=VALUE ...]
   local obj
   obj="$(kubectl -n "$NS" get sts,deploy -o name | grep -E "/${RELEASE}-${name}$" | head -n1 || true)"
   [ -n "$obj" ] || { warn "không thấy ${RELEASE}-${name}"; return 0; }
-  kubectl -n "$NS" set resources "$obj" --limits="memory=${lim}Mi" --requests="memory=${req}Mi,cpu=${cpu}" >/dev/null
+  # Đặt CPU limit tường minh; nếu bỏ trống, LimitRange mặc định 250m có thể
+  # nhỏ hơn request 400-500m và khiến Kubernetes từ chối tạo pod.
+  kubectl -n "$NS" set resources "$obj" \
+    --limits="memory=${lim}Mi,cpu=${cpu}" \
+    --requests="memory=${req}Mi,cpu=${cpu}" >/dev/null
   if [ "$#" -gt 0 ]; then kubectl -n "$NS" set env "$obj" "$@" >/dev/null; fi
   ok "$obj  limit=${lim}Mi request=${req}Mi cpu=${cpu}"
 }
