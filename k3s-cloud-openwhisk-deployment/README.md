@@ -30,6 +30,9 @@ NODE_NAME=k3s-cloud-w1 ./scripts/03-setup-k3s-worker.sh
 ./scripts/04-verify-cluster.sh                # phải CHƯA ĐẠT: 0
 GOLDEN_LOCK=/đường/dẫn/golden.lock ./openwhisk/install-openwhisk.sh    # GOLDEN_LOCK tùy chọn
 
+# Nếu cần cài lại OpenWhisk (không gỡ K3s):
+./openwhisk/uninstall-openwhisk.sh
+
 # 4) Action + đăng ký vào Gateway
 DASHBOARD_URL=http://<ip-tailscale-dashboard>:9000 CLUSTER_NAME=c4 ./actions/deploy-actions.sh
 ./gateway/register-cloud-cluster.sh http://<ip-tailscale-gateway>:8080
@@ -48,6 +51,7 @@ Thứ tự `01 → 02 → 03` là bắt buộc: `--node-ip`/`--bind-address` l�
 | `--bind-address` = IP Tailscale | API 6443 không lộ ra IP public/VPC. Kèm drop-in systemd để k3s đợi Tailscale sau reboot |
 | `--flannel-iface tailscale0`, backend `vxlan` | Pod↔pod xuyên node được WireGuard mã hóa; `wireguard-native` sẽ mã hóa 2 lần |
 | Server schedulable | Tận dụng 4 GB server trong cụm nhỏ; ResourceQuota vẫn giữ vùng an toàn |
+| 2 invoker | `custom-values.yaml` và installer cùng khóa 2 invoker để có 2 worker xử lý action |
 | Nhãn `openwhisk-role=invoker` gắn lúc join | Không cần node-affinity/tolerations tự viết; khớp quy ước Golden |
 | Cùng commit chart + tag image | Triển khai tái lập, không phụ thuộc Docker/k3d |
 | Persistence bật (`local-path`) | Theo Golden hiện tại; PV gắn cứng vào node (xem F2) |

@@ -209,6 +209,17 @@ cd k3s-cloud-openwhisk-deployment
 bash openwhisk/install-openwhisk.sh
 ```
 
+Installer mặc định triển khai **2 invoker**. Khi cần cài lại OpenWhisk, không
+cần gỡ K3s:
+
+```bash
+bash openwhisk/uninstall-openwhisk.sh
+bash openwhisk/install-openwhisk.sh
+```
+
+Uninstaller yêu cầu xác nhận, mặc định xóa PVC để tránh dữ liệu cũ cản lần cài
+lại. Muốn giữ PVC dùng `DELETE_PVCS=0`; script không xóa K3s, Tailscale hoặc node.
+
 Script cài chart, áp dụng resource policy và kiểm tra các pod core. Có thể dùng
 lock file Golden nếu môi trường yêu cầu:
 

@@ -9,7 +9,7 @@
 #    API_HOST=100.x.x.x         (mặc định: IP Tailscale của node workload đầu tiên)
 #    CHART_COMMIT=<sha>         (mặc định = commit đã pin trong repo)
 #    GOLDEN_LOCK=/đường/dẫn/golden.lock   (nếu có: so mã băm chart, bắt lệch phiên bản)
-#    RELEASE=owdev NS=openwhisk TIMEOUT=900
+#    RELEASE=owdev NS=openwhisk TIMEOUT=900 INVOKER_REPLICAS=2
 # =====================================================================
 set -Eeuo pipefail
 trap 'echo "❌ Dừng ở dòng $LINENO (lệnh: $BASH_COMMAND)" >&2' ERR
@@ -19,6 +19,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/scripts/lib.sh"
 
 RELEASE="${RELEASE:-owdev}"; NS="${NS:-openwhisk}"; TIMEOUT="${TIMEOUT:-900}"
+INVOKER_REPLICAS="${INVOKER_REPLICAS:-2}"
 CHART_REPO="${CHART_REPO:-https://github.com/apache/openwhisk-deploy-kube.git}"
 CHART_COMMIT="${CHART_COMMIT:-146d24925564e2871f4cc6506d4e92098968457d}"
 SRC_DIR="${SRC_DIR:-$ROOT_DIR/openwhisk-deploy-kube}"
@@ -26,6 +27,9 @@ CHART_DIR="$SRC_DIR/helm/openwhisk"
 VALUES="$SCRIPT_DIR/custom-values.yaml"
 GOLDEN_LOCK="${GOLDEN_LOCK:-}"
 PY_KINDS="${PY_KINDS:-python:3}"
+
+[[ "$INVOKER_REPLICAS" =~ ^[1-9][0-9]*$ ]] \
+  || die "INVOKER_REPLICAS phải là số nguyên dương"
 
 # --- Ngân sách RAM (Mi) cho cụm 9GB (server 4GB + 2 agent 2.5GB) ---
 # Core request ~ 2304Mi; core limit ~ 4352Mi. LimitRange/ResourceQuota ở cấp namespace
@@ -76,16 +80,22 @@ else
   warn "Không có GOLDEN_LOCK: chỉ đối chiếu theo commit. (Đặt GOLDEN_LOCK=.../golden.lock để so mã băm)"
 fi
 
-log "3/7 Kiểm tra render Helm..."
-RENDER="$(helm template "$RELEASE" "$CHART_DIR" -n "$NS" -f "$VALUES" --set whisk.ingress.apiHostName="$API_HOST" 2>&1)" \
+log "3/7 Kiểm tra render Helm (invoker replicas=$INVOKER_REPLICAS)..."
+HELM_SET_ARGS=(
+  --set "whisk.ingress.apiHostName=$API_HOST"
+  --set "invoker.containerFactory.kubernetes.replicaCount=$INVOKER_REPLICAS"
+  --set "invoker.kubernetes.replicaCount=$INVOKER_REPLICAS"
+)
+RENDER="$(helm template "$RELEASE" "$CHART_DIR" -n "$NS" -f "$VALUES" "${HELM_SET_ARGS[@]}" 2>&1)" \
   || { echo "$RENDER" | tail -20; die "helm template lỗi"; }
 for k in 600000 1024m ef725a6; do
   grep -q -- "$k" <<< "$RENDER" && ok "Render có '$k'" || warn "KHÔNG thấy '$k' trong bản render -> khóa values có thể không được chart nhận"
 done
+ok "Đã khóa cấu hình Helm với $INVOKER_REPLICAS invoker"
 
 log "4/7 helm upgrade --install..."
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-helm upgrade --install "$RELEASE" "$CHART_DIR" -n "$NS" -f "$VALUES" --set whisk.ingress.apiHostName="$API_HOST"
+helm upgrade --install "$RELEASE" "$CHART_DIR" -n "$NS" -f "$VALUES" "${HELM_SET_ARGS[@]}"
 ok "helm xong"
 
 log "5/7 Khóa trần RAM pod..."
@@ -128,6 +138,10 @@ done
 kubectl -n "$NS" get pods -o wide | awk 'NR==1 || /invoker|controller|couchdb|kafka|nginx/'
 INV_NODES="$(kubectl -n "$NS" get pods -l name="${RELEASE}-invoker" -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l)"
 [ "$INV_NODES" -ge 2 ] && ok "Các invoker đã phân bổ trên $INV_NODES node khác nhau" || warn "Các invoker đang dồn trên $INV_NODES node (kiểm tra nhãn/affinity)"
+INV_COUNT="$(kubectl -n "$NS" get pods -l name="${RELEASE}-invoker" --no-headers 2>/dev/null | wc -l)"
+[ "$INV_COUNT" -eq "$INVOKER_REPLICAS" ] \
+  && ok "Đúng $INV_COUNT/$INVOKER_REPLICAS invoker pod" \
+  || warn "Đang thấy $INV_COUNT/$INVOKER_REPLICAS invoker pod; rollout có thể chưa hoàn tất"
 
 log "7/7 Tải sẵn image Python runtime vào các node (tránh cold-start 20 giây đầu)..."
 PYIMG="$(python3 - "$CHART_DIR/runtimes.json" "$PY_KINDS" <<'PY'

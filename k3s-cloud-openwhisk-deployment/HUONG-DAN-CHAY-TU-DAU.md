@@ -291,6 +291,24 @@ $ watch kubectl -n openwhisk get pods -o wide
 ```bash
 $ GOLDEN_LOCK=~/golden.lock ./openwhisk/install-openwhisk.sh
 ```
+
+Installer mặc định khóa **2 invoker** (`INVOKER_REPLICAS=2`). Nếu cần cài lại
+OpenWhisk mà vẫn giữ nguyên K3s, chạy:
+
+```bash
+$ ./openwhisk/uninstall-openwhisk.sh
+$ GOLDEN_LOCK=~/golden.lock ./openwhisk/install-openwhisk.sh
+```
+
+Script uninstall yêu cầu nhập `DELETE OPENWHISK` để xác nhận và mặc định xóa
+PVC trong namespace `openwhisk`. Nó không xóa K3s, Tailscale hoặc node. Muốn
+giữ PVC:
+
+```bash
+$ DELETE_PVCS=0 ./openwhisk/uninstall-openwhisk.sh
+```
+
+Chỉ dùng `FORCE=1` khi chạy tự động và đã kiểm tra đúng context Kubernetes.
 ```
 ▶ 1/7 Kiểm tra môi trường...
 ✅ API host (worker, IP Tailscale): 100.88.1.11
