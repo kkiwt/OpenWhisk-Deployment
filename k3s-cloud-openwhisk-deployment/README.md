@@ -2,18 +2,21 @@
 
 > Mới làm lần đầu? Đọc **HUONG-DAN-CHAY-TU-DAU.md**: từng lệnh kèm kết quả mong đợi.
 
-Cụm 3 VM: **1 master** (control-plane, bị taint) + **2 worker** (toàn bộ pod OpenWhisk = 8 vCPU / 16 GB).
-Mọi giao tiếp giữa node (API 6443, kubelet, VXLAN của flannel) đi trong tunnel Tailscale. Cụm này là **c4**,
-đứng cạnh 3 cụm k3d c1–c3 sau cùng một Gateway.
+Cụm 3 VM: **1 server 4 GB + 2 agent 2.5 GB**. Cả 3 node đều có thể chạy workload;
+server không bị taint mặc định để không lãng phí RAM. Mọi giao tiếp giữa node (API 6443,
+kubelet, VXLAN của flannel) đi trong tunnel Tailscale.
 
 ```
-Gateway/K6 ──Tailscale──▶ NodePort 31001 (worker) ──▶ nginx OpenWhisk ──▶ controller ──Kafka──▶ invoker x2 ──▶ action pod
+Gateway/K6 ──Tailscale──▶ NodePort 31001 (server/agent) ──▶ nginx OpenWhisk ──▶ controller ──Kafka──▶ invoker x2 ──▶ action pod
 ```
 
 ## Chạy theo thứ tự
 
 ```bash
-# 0) Trên MỌI VM: lấy repo về, rồi
+# 0) Trên Windows chạy scripts/00-install-windows-prerequisites.ps1 và
+#    scripts/05-install-k9s.ps1 nếu muốn dùng K9s.
+#    Trên MỌI Ubuntu VM chạy scripts/00-install-linux-prerequisites.sh, rồi
+#    chạy scripts/05-install-k9s.sh trên máy sẽ dùng K9s nếu cần.
 export TS_AUTHKEY='tskey-auth-...'            # KHÔNG ghi vào file / commit
 TS_HOSTNAME=k3s-cloud-master ./scripts/01-install-tailscale.sh     # (w1, w2 tương tự)
 
@@ -44,15 +47,15 @@ Thứ tự `01 → 02 → 03` là bắt buộc: `--node-ip`/`--bind-address` l�
 |---|---|
 | `--bind-address` = IP Tailscale | API 6443 không lộ ra IP public/VPC. Kèm drop-in systemd để k3s đợi Tailscale sau reboot |
 | `--flannel-iface tailscale0`, backend `vxlan` | Pod↔pod xuyên node được WireGuard mã hóa; `wireguard-native` sẽ mã hóa 2 lần |
-| Master taint `NoSchedule` | Ngân sách 8 vCPU/16 GB là của 2 worker; giống cụm k3d |
+| Server schedulable | Tận dụng 4 GB server trong cụm nhỏ; ResourceQuota vẫn giữ vùng an toàn |
 | Nhãn `openwhisk-role=invoker` gắn lúc join | Không cần node-affinity/tolerations tự viết; khớp quy ước Golden |
-| Cùng commit chart + tag image với `golden.lock` | So sánh công bằng với c1–c3 |
+| Cùng commit chart + tag image | Triển khai tái lập, không phụ thuộc Docker/k3d |
 | Persistence bật (`local-path`) | Theo Golden hiện tại; PV gắn cứng vào node (xem F2) |
-| Cửa vào = IP worker, không phải master | Master chỉ control-plane; đi qua nó thêm 1 chặng |
+| Cửa vào = IP của node có nhãn workload | NodePort được kube-proxy phục vụ trên cả server và agent |
 
 ## Kịch bản chaos F1–F5 trên K3s thật
 
-`chaos.sh` hiện cứng `docker stop` / tên node k3d cho F2, F4 nên **không dùng nguyên cho c4**. Tương đương:
+`legacy-k3d/chaos/chaos.sh` cứng `docker stop` / tên node k3d nên **không dùng cho K3s**. Tương đương:
 
 | Mã | Cách làm trên c4 |
 |---|---|

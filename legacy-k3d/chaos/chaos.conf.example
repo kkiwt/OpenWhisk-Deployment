@@ -2,12 +2,9 @@
 # Do not commit chaos.conf: it contains private Tailscale addresses and SSH users.
 
 CHAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$CHAOS_DIR/.." && pwd)"
-if [ -d "$PROJECT_ROOT/golden-config-final/golden" ]; then
-  DEFAULT_GOLDEN_DIR="$PROJECT_ROOT/golden-config-final/golden"
-else
-  DEFAULT_GOLDEN_DIR="$PROJECT_ROOT/golden"
-fi
+LEGACY_ROOT="$(cd "$CHAOS_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$LEGACY_ROOT/.." && pwd)"
+DEFAULT_GOLDEN_DIR="$LEGACY_ROOT/golden-config-final/golden"
 GOLDEN_DIR="${GOLDEN_DIR:-$DEFAULT_GOLDEN_DIR}"
 K6_DIR="${K6_DIR:-$PROJECT_ROOT/k6}"
 

@@ -10,8 +10,9 @@ the stats and recent-event APIs.
 Run one worker because the event buffer is process-local:
 
 ```bash
-cd "openwhisk dashboard"
-python -m uvicorn dashboard:app --host 0.0.0.0 --port 9000 --workers 1
+cd openwhisk-dashboard
+bash install-linux.sh
+bash run-linux.sh
 ```
 
 The dashboard host must be reachable from each OpenWhisk cluster. Use its
@@ -24,8 +25,7 @@ Create `~/.wskprops.c1`, `~/.wskprops.c2`, and/or `~/.wskprops.c3` for the
 clusters to configure, then run:
 
 ```bash
-DASHBOARD_URL=http://<TAILSCALE-DASHBOARD-IP>:9000 \
-CLUSTERS="c1 c2 c3" SAMPLE_RATE=0.05 \
+cd openwhisk-dashboard
 ./deploy-openwhisk-actions.sh
 ```
 

@@ -1,5 +1,8 @@
 import asyncio, itertools, os, random, time, logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware

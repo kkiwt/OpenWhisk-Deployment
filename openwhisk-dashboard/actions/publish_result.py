@@ -27,10 +27,14 @@ def main(args):
 
     body = json.dumps(record).encode("utf-8")
 
+    headers = {"Content-Type": "application/json"}
+    if args.get("INGEST_TOKEN"):
+        headers["X-Ingest-Token"] = str(args["INGEST_TOKEN"])
+
     req = urllib.request.Request(
         target + "/ingest",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST"
     )
 

@@ -72,8 +72,7 @@ EOF
 }
 
 # "Cửa vào" NodePort 31001 của cụm = IP Tailscale (InternalIP, vì ta đặt --node-ip) của
-# worker đầu tiên. Chọn worker thay vì master: master bị taint, chỉ chạy control-plane,
-# đi qua nó chỉ thêm một chặng và biến master thành điểm lỗi của cả data-plane.
+# node đầu tiên có nhãn workload. NodePort được kube-proxy phục vụ trên mọi node.
 ow_api_host() {
   kubectl get nodes -l openwhisk-role=invoker \
     -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'

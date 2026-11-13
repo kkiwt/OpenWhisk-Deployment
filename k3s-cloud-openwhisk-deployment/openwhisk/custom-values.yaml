@@ -1,12 +1,10 @@
 # =====================================================================
-#  custom-values.yaml - OpenWhisk trên K3s THẬT: 1 master + 2 worker (CloudFly, Tailscale)
+#  custom-values.yaml - OpenWhisk trên K3s: 1 server 4GB + 2 agent 2.5GB
 #
-#  Kế thừa Golden Config của 3 cụm k3d (cùng tag image, cùng giới hạn gọi) để kết quả K6
-#  so sánh công bằng. Chỉ KHÁC ở những chỗ phản ánh phần cứng thật, đều có chú thích bên dưới.
+#  Dùng tag image ổn định trong repo, không phụ thuộc Docker/k3d.
 #
-#  NGÂN SÁCH TÀI NGUYÊN: pod OpenWhisk chỉ chạy trên 2 worker = 8 vCPU / 16 GB
-#  (master bị taint, chỉ chạy control-plane). Mỗi worker còn khoảng 7 GB cho pod sau khi trừ
-#  OS + containerd + k3s-agent + tailscaled (~1 GB).
+#  NGÂN SÁCH TÀI NGUYÊN: cả 3 node đều chạy workload, tổng RAM danh nghĩa 9 GB.
+#  ResourceQuota/LimitRange giữ vùng an toàn sau khi trừ OS + containerd + k3s.
 #
 #     Thành phần              giới hạn pod   heap JVM   ghi chú
 #     controller x1           2048 Mi        1280 m     (đặt bằng install-openwhisk.sh)
@@ -15,8 +13,8 @@
 #     zookeeper x1             512 Mi        256-384 m
 #     couchdb x1              1024 Mi        -
 #     nginx/redis/apigw/...   ~600 Mi        -
-#     action container        2 x 3072 Mi (userMemory) = tối đa 48 container x 128 Mi
-#     -> REQUESTS ~ 11,9 GiB < ~14 GiB allocatable: scheduler không bao giờ hết chỗ.
+#     action container        3 x 1024 Mi (userMemory) = tối đa 24 container x 128 Mi
+#     -> action runtime bị giới hạn, không thể ăn hết RAM node 2.5GB.
 #  Trần RAM pod KHÔNG đặt được ở file này (chart không có khóa `resources` cho các
 #  thành phần lõi) nên do install-openwhisk.sh đặt ngay sau helm (kubectl set resources).
 # =====================================================================
@@ -42,10 +40,9 @@ whisk:
 
   containerPool:
     # TRẦN xếp chỗ cho action container của MỖI invoker (RAM thật dùng ít hơn nhiều).
-    # 3072m / 128m = 24 chỗ/invoker, 48 chỗ cả cụm. Tải K6 tối đa ~160 req/s, action ~0,15 s
-    # trung bình -> cần ~25 container đồng thời, dư gấp đôi. Golden k3d dùng 2048m vì
-    # node chỉ 3,25 GB; ở đây worker 8 GB nên nâng lên để cold-start ít bị xếp hàng.
-    userMemory: "3072m"
+    # 1024m / 128m = 8 chỗ/invoker, 24 chỗ cả cụm. Đây là giới hạn bảo vệ cho
+    # agent 2.5GB; tăng userMemory chỉ khi đã đo được headroom thực tế.
+    userMemory: "1024m"
 
 # ---------------------------------------------------------------------
 # LƯU BỀN: giữ như Golden Config hiện tại của project (PVC bật).
@@ -118,6 +115,5 @@ busybox:
   imageTag: "1.36.1"
 
 # Không đặt affinity/tolerations: để mặc định của chart. Worker đã mang nhãn
-# openwhisk-role=invoker (do 03-setup-k3s-worker.sh gắn lúc join) và master đã taint
-# nên scheduler chỉ còn 2 worker; thành phần lõi tự rải theo preferred-affinity.
-# Đây đúng là cấu hình đã chạy ổn trên 3 cụm k3d.
+# openwhisk-role=invoker trên cả server và agent; thành phần lõi tự rải theo
+# preferred-affinity, không dành riêng server cho control-plane.

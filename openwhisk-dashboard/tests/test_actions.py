@@ -7,7 +7,10 @@ from actions import publish_result
 
 
 class AcceptedResponse:
-    status = 202
+    status = 200
+
+    def read(self):
+        return b'{}'
 
     def __enter__(self):
         return self
@@ -45,3 +48,23 @@ def test_publisher_rejects_missing_event_fields_instead_of_fabricating_them():
 
     assert result["sent"] is False
     assert "req_id" in result["error"]
+
+
+def test_publisher_forwards_dashboard_ingest_token():
+    args = {
+        "MODE": "dashboard",
+        "TARGET_URL": "http://dashboard",
+        "INGEST_TOKEN": "shared-secret",
+        "req_id": "activation-123",
+        "cluster": "c1",
+        "action": "A1",
+        "status": "ok",
+        "duration_ms": 12.5,
+        "ts": 1790000000,
+    }
+    with patch.object(publish_result.urllib.request, "urlopen", return_value=AcceptedResponse()) as urlopen:
+        result = publish_result.main(args)
+
+    request = urlopen.call_args.args[0]
+    assert request.headers["X-ingest-token"] == "shared-secret"
+    assert result["sent"] is True

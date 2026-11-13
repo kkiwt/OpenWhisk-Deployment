@@ -4,8 +4,8 @@
 #  Chạy trên VM master, SAU 01-install-tailscale.sh.
 #
 #  Biến tùy chọn:
-#    K3S_VERSION=v1.35.5+k3s1   (mặc định = đúng phiên bản của 3 cụm k3d để so sánh công bằng)
-#    NODE_NAME=k3s-cloud-master TAINT_MASTER=1 EXTRA_TLS_SAN=a.b.c.d,host.example
+#    K3S_VERSION=v1.35.5+k3s1   (pin để các node dùng cùng phiên bản)
+#    NODE_NAME=k3s-cloud-master TAINT_MASTER=0 EXTRA_TLS_SAN=a.b.c.d,host.example
 #    CLUSTER_CIDR=10.42.0.0/16 SERVICE_CIDR=10.43.0.0/16
 # =====================================================================
 set -Eeuo pipefail
@@ -17,7 +17,7 @@ need_root "$@"
 
 K3S_VERSION="${K3S_VERSION:-v1.35.5+k3s1}"
 NODE_NAME="$(echo "${NODE_NAME:-$(hostname -s)}" | tr '[:upper:]' '[:lower:]')"  # tên node K8s phải là chữ thường
-TAINT_MASTER="${TAINT_MASTER:-1}"
+TAINT_MASTER="${TAINT_MASTER:-0}"
 EXTRA_TLS_SAN="${EXTRA_TLS_SAN:-}"
 CLUSTER_CIDR="${CLUSTER_CIDR:-10.42.0.0/16}"
 SERVICE_CIDR="${SERVICE_CIDR:-10.43.0.0/16}"
@@ -70,8 +70,8 @@ K3S_FLAGS=(
   --write-kubeconfig-mode 0600
 )
 if [ "$TAINT_MASTER" = "1" ]; then
-  # Ngân sách workload là 2 worker (8 vCPU/16 GB). Taint để pod OpenWhisk không chiếm RAM của
-  # master (K3s server + sqlite cần dư địa). Giống cụm k3d: server taint NoSchedule.
+  # Chỉ bật khi muốn dành riêng server cho control-plane. Mặc định server được chạy workload
+  # để tận dụng 4 GB RAM trong mô hình nhỏ.
   K3S_FLAGS+=(--node-taint "node-role.kubernetes.io/control-plane:NoSchedule")
 fi
 if [ -n "$EXTRA_TLS_SAN" ]; then
@@ -88,6 +88,7 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml k3s kubectl get nodes -o wide || die "API server không trả lời. Xem: journalctl -u k3s -n 50"
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml k3s kubectl label node "$NODE_NAME" openwhisk-role=invoker --overwrite >/dev/null
 ok "Master Ready"
 
 # --- K3S_TOKEN + lệnh join cho worker -------------------------------------------------

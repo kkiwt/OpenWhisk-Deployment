@@ -28,10 +28,32 @@ Tổng thời gian lần đầu: khoảng **75–100 phút** (phần lớn là c
 | Mục | Giá trị | Vì sao |
 |---|---|---|
 | OS | Ubuntu 22.04 hoặc 24.04, **cả 3 máy cùng bản** | Cùng kernel/containerd, đỡ lỗi lạ |
-| Master | 4 vCPU / 8 GB | Chỉ chạy control-plane (bị taint) |
-| Worker x2 | 4 vCPU / 8 GB mỗi máy | Toàn bộ pod OpenWhisk = 8 vCPU / 16 GB |
-| Đĩa | ≥ 40 GB mỗi máy | Image OpenWhisk + PV `local-path` nằm trên đĩa worker |
+| Server | 2 vCPU / 4 GB | Control-plane + được phép chạy workload |
+| Agent x2 | 2 vCPU / 2.5 GB mỗi máy | Chạy workload cùng server; có resource quota |
+| Đĩa | ≥ 30 GB mỗi máy | Image OpenWhisk + PV `local-path` nằm trên đĩa node |
 | Swap | **Tắt** (script tự tắt) | Swap làm JVM đẩy ra đĩa, P99 tăng vọt |
+
+### A0. Máy Windows và công cụ quản trị
+
+Windows không chạy k3s node native. Dùng Windows làm máy quản trị/Gateway/K6, còn
+server và agent chạy Ubuntu VM (hoặc Ubuntu trong WSL2 cho môi trường lab).
+
+Trên Windows PowerShell (Run as Administrator):
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\00-install-windows-prerequisites.ps1
+```
+
+Trên cả ba Ubuntu VM:
+
+```bash
+chmod +x scripts/*.sh openwhisk/*.sh actions/*.sh gateway/*.sh tests/*.sh
+sudo ./scripts/00-install-linux-prerequisites.sh
+```
+
+Script Linux chỉ cài package hệ điều hành; K3s, Tailscale, Helm và `wsk` được
+kiểm tra/cài theo từng bước để dễ phát hiện lỗi mạng hoặc quyền.
 
 ### A2. Kiểm tra trên từng VM
 
@@ -173,7 +195,7 @@ Taints:             node-role.kubernetes.io/control-plane:NoSchedule
 ```bash
 $ kubectl get pods -A
 ```
-`coredns`, `local-path-provisioner`, `metrics-server` ở trạng thái **Pending** là bình thường lúc này: master bị taint và chưa có worker. Chúng sẽ chạy khi worker join.
+`coredns`, `local-path-provisioner`, `metrics-server` có thể Pending trong vài giây lúc server mới khởi động; chúng sẽ chạy khi node đủ Ready.
 
 ---
 
@@ -227,9 +249,9 @@ $ ./scripts/04-verify-cluster.sh
 ✅ 3 node Ready
 ▶ 2/6 INTERNAL-IP của mọi node phải là IP Tailscale (100.x)...
 ✅ Mọi node dùng IP Tailscale
-▶ 3/6 Nhãn invoker + taint master...
-✅ 2 worker có nhãn openwhisk-role=invoker
-✅ Master có taint control-plane:NoSchedule
+▶ 3/6 Nhãn workload trên toàn bộ node...
+✅ 3 node có nhãn openwhisk-role=invoker
+✅ Không có taint NoSchedule
 ▶ 4/6 StorageClass mặc định...
 ✅ Có StorageClass mặc định
 ▶ 5/6 Đường Tailscale giữa các node (direct hay relay)...
@@ -255,9 +277,9 @@ $ ./scripts/04-verify-cluster.sh
 
 ## PHẦN F: OpenWhisk ⏱ (10–15 phút)
 
-**F1. (Khuyến nghị) chép `golden.lock` của 3 cụm k3d sang master** để script so mã băm chart:
+**F1. (Khuyến nghị) chép `golden.lock` từ bản triển khai chuẩn sang server** để script so mã băm chart:
 ```bash
-$ scp golden-config-final/golden/golden.lock ubuntu@100.88.1.10:~/golden.lock    # chạy trên máy bạn
+$ scp legacy-k3d/golden-config-final/golden/golden.lock ubuntu@100.88.1.10:~/golden.lock    # chạy trên máy bạn
 ```
 
 **F2. Mở Terminal 2 trên master để theo dõi:**
@@ -276,7 +298,7 @@ $ GOLDEN_LOCK=~/golden.lock ./openwhisk/install-openwhisk.sh
 ✅ Chart khớp golden.lock
 ▶ 3/7 Kiểm tra render Helm...
 ✅ Render có '600000'
-✅ Render có '3072m'
+✅ Render có '1024m'
 ✅ Render có 'ef725a6'
 ▶ 4/7 helm upgrade --install...
 Release "owdev" does not exist. Installing it now.
@@ -519,7 +541,7 @@ owdev-invoker-0   1/1   Running             0   38s
 | **F2** chết node | `ssh k3s-cloud-w1 'sudo k3s-killall.sh'` | `ssh k3s-cloud-w1 'sudo systemctl start k3s-agent'` rồi `kubectl wait --for=condition=Ready node/k3s-cloud-w1 --timeout=300s` |
 | **F3a** trễ mạng | `kubectl apply -f tests/chaos-network-delay.yaml` (tự hết sau 120s) | `kubectl delete -f tests/chaos-network-delay.yaml` |
 | **F3b** trễ tunnel thật | trên worker: `sudo tc qdisc add dev tailscale0 root netem delay 150ms 30ms 25%` | `sudo tc qdisc del dev tailscale0 root` |
-| **F3c** đứt hẳn | thêm `IP_c4="100.88.1.11"` vào `chaos/chaos.conf` rồi `./chaos.sh tailscale start --target c4` (Máy 1) | `./chaos.sh tailscale stop --target c4` |
+| **F3c** đứt hẳn | Dùng `tests/chaos-network-delay.yaml` hoặc firewall Tailscale trên node K3s | Khôi phục rule/network sau thử nghiệm |
 | **F4** chết cả cụm | `k3s-killall.sh` trên cả 2 worker, rồi `sudo systemctl stop k3s` ở master | `sudo systemctl start k3s` ở master, rồi `k3s-agent` ở 2 worker |
 | **F5** trạm nhận chết | xem lệnh dưới | xem lệnh dưới |
 

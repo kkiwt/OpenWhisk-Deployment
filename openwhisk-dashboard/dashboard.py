@@ -19,8 +19,10 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 MAX_RECORDS = 5000
 MAX_PAYLOAD_BYTES = 8192
 INGEST_TOKEN = os.getenv("INGEST_TOKEN", "")

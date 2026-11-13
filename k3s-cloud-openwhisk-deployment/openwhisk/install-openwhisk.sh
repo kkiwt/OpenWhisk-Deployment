@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =====================================================================
-#  install-openwhisk.sh - cài OpenWhisk lên cụm K3s 3 node (1 Master 4GB + 2 Worker 2GB)
+#  install-openwhisk.sh - cài OpenWhisk lên cụm K3s (server 4GB + 2 agent 2.5GB)
 #
-#  Làm: mở khóa master -> kiểm tra -> tải chart -> helm install -> ép trần RAM pod
+#  Làm: mở khóa server -> kiểm tra -> tải chart -> helm install -> ép trần RAM pod
 #       -> chờ pod sẵn sàng -> tải sẵn image Python -> thử API.
 #
 #  Biến tùy chọn:
-#    API_HOST=100.x.x.x         (mặc định: IP Tailscale của worker đầu tiên)
-#    CHART_COMMIT=<sha>         (mặc định = commit trong golden.lock của 3 cụm k3d)
+#    API_HOST=100.x.x.x         (mặc định: IP Tailscale của node workload đầu tiên)
+#    CHART_COMMIT=<sha>         (mặc định = commit đã pin trong repo)
 #    GOLDEN_LOCK=/đường/dẫn/golden.lock   (nếu có: so mã băm chart, bắt lệch phiên bản)
 #    RELEASE=owdev NS=openwhisk TIMEOUT=900
 # =====================================================================
@@ -27,9 +27,9 @@ VALUES="$SCRIPT_DIR/custom-values.yaml"
 GOLDEN_LOCK="${GOLDEN_LOCK:-}"
 PY_KINDS="${PY_KINDS:-python:3}"
 
-# --- Ngân sách RAM (Mi) tối ưu cho cụm 8GB (Master 4GB + 2 Worker 2GB) ---
-# Tổng Request ~ 2304Mi -> Đảm bảo K8s xếp lịch được toàn bộ pod mà không kẹt Pending.
-# Tổng Limit   ~ 4352Mi -> Ngăn pod ăn lẹm vào RAM của hệ điều hành và K3s.
+# --- Ngân sách RAM (Mi) cho cụm 9GB (server 4GB + 2 agent 2.5GB) ---
+# Core request ~ 2304Mi; core limit ~ 4352Mi. LimitRange/ResourceQuota ở cấp namespace
+# giữ vùng an toàn cho K3s khi action pod tăng lên.
 CONTROLLER_LIMIT=1280; CONTROLLER_REQUEST=768;  CONTROLLER_CPU=500m
 INVOKER_LIMIT=1024;    INVOKER_REQUEST=512;     INVOKER_CPU=500m
 KAFKA_LIMIT=1024;      KAFKA_REQUEST=512;       KAFKA_CPU=400m;  KAFKA_HEAP="-Xms512m -Xmx512m"
@@ -44,18 +44,18 @@ if ! command -v helm >/dev/null 2>&1; then
 fi
 kubectl get nodes >/dev/null 2>&1 || die "kubectl không nối được cụm (~/.kube/config từ script 02?)"
 
-# Gỡ taint NoSchedule trên master và gắn nhãn để master 4GB cùng gánh pod với 2 worker 2GB
+# Gỡ taint NoSchedule trên server và gắn nhãn để server 4GB cùng gánh pod với 2 agent 2.5GB
 MASTER_NODE=$(kubectl get nodes --selector='node-role.kubernetes.io/master' -o name 2>/dev/null | head -n 1)
 [ -z "$MASTER_NODE" ] && MASTER_NODE=$(kubectl get nodes --selector='node-role.kubernetes.io/control-plane' -o name 2>/dev/null | head -n 1)
 if [ -n "$MASTER_NODE" ]; then
-  kubectl taint nodes "$MASTER_NODE" node-role.kubernetes.io/master:NoSchedule- 2>/dev/null || true
-  kubectl taint nodes "$MASTER_NODE" node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
-  kubectl label "$MASTER_NODE" openwhisk-role=invoker --overwrite >/dev/null 2>&1 || true
+  kubectl taint nodes "$MASTER_NODE" node-role.kubernetes.io/master:NoSchedule- >/dev/null 2>&1 || true
+  kubectl taint nodes "$MASTER_NODE" node-role.kubernetes.io/control-plane:NoSchedule- >/dev/null 2>&1 || true
+  kubectl label "$MASTER_NODE" openwhisk-role=invoker --overwrite >/dev/null
   ok "Đã mở khóa $MASTER_NODE để chia sẻ tải RAM"
 fi
 
-[ "$(kubectl get nodes -l openwhisk-role=invoker --no-headers | wc -l)" -ge 1 ] \
-  || die "Chưa có node nào mang nhãn openwhisk-role=invoker (worker join bằng script 03?)"
+[ "$(kubectl get nodes -l openwhisk-role=invoker --no-headers | wc -l)" -ge 3 ] \
+  || die "Cần 3 node mang nhãn openwhisk-role=invoker (đã join đủ 2 agent chưa?)"
 kubectl get storageclass | grep -q '(default)' || die "Không có StorageClass mặc định"
 API_HOST="${API_HOST:-$(ow_api_host)}"
 [ -n "$API_HOST" ] || die "Không xác định được API_HOST"
@@ -79,7 +79,7 @@ fi
 log "3/7 Kiểm tra render Helm..."
 RENDER="$(helm template "$RELEASE" "$CHART_DIR" -n "$NS" -f "$VALUES" --set whisk.ingress.apiHostName="$API_HOST" 2>&1)" \
   || { echo "$RENDER" | tail -20; die "helm template lỗi"; }
-for k in 600000 3072m ef725a6; do
+for k in 600000 1024m ef725a6; do
   grep -q -- "$k" <<< "$RENDER" && ok "Render có '$k'" || warn "KHÔNG thấy '$k' trong bản render -> khóa values có thể không được chart nhận"
 done
 
@@ -103,6 +103,10 @@ cap invoker    "$INVOKER_LIMIT"    "$INVOKER_REQUEST"    "$INVOKER_CPU"
 cap kafka      "$KAFKA_LIMIT"      "$KAFKA_REQUEST"      "$KAFKA_CPU"     "KAFKA_HEAP_OPTS=$KAFKA_HEAP"
 cap couchdb    "$COUCHDB_LIMIT"    "$COUCHDB_REQUEST"    "$COUCHDB_CPU"
 cap zookeeper  "$ZOOKEEPER_LIMIT"  "$ZOOKEEPER_REQUEST"  "$ZOOKEEPER_CPU" "JVMFLAGS=$ZOOKEEPER_HEAP"
+
+log "5b/7 Áp dụng giới hạn namespace cho workload..."
+kubectl -n "$NS" apply -f "$ROOT_DIR/k3s-resource-policy.yaml" >/dev/null
+ok "Đã giới hạn memory/cpu/pod trong namespace $NS"
 
 log "6/7 Chờ pod sẵn sàng (tối đa ${TIMEOUT}s)..."
 deadline=$(( $(date +%s) + TIMEOUT )); LAST=""; READY=0

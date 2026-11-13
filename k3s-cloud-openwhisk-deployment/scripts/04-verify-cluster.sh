@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 need_cmd kubectl
 EXPECTED_NODES="${EXPECTED_NODES:-3}"
+EXPECTED_INVOKER_NODES="${EXPECTED_INVOKER_NODES:-3}"
 PASS=0; FAIL=0
 good() { ok "$*"; PASS=$((PASS+1)); }
 bad()  { printf '%s❌ %s%s\n' "$C_R" "$*" "$C_N"; FAIL=$((FAIL+1)); }
@@ -26,13 +27,17 @@ log "2/6 INTERNAL-IP của mọi node phải là IP Tailscale (100.x)..."
 BADIP="$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' | awk '$2 !~ /^100\./')"
 if [ -z "$BADIP" ]; then good "Mọi node dùng IP Tailscale"; else bad "Node sai IP (thiếu --node-ip?): $BADIP"; fi
 
-log "3/6 Nhãn invoker + taint master..."
+log "3/6 Nhãn workload trên toàn bộ node..."
 NW="$(kubectl get nodes -l openwhisk-role=invoker --no-headers | wc -l)"
-if [ "$NW" -ge $((EXPECTED_NODES-1)) ]; then good "$NW worker có nhãn openwhisk-role=invoker"; else bad "Chỉ $NW worker có nhãn invoker (kubectl label node <tên> openwhisk-role=invoker)"; fi
-if kubectl get nodes -l 'node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].spec.taints[*].key}' | grep -q 'control-plane'; then
-  good "Master có taint control-plane:NoSchedule"
+if [ "$NW" -ge "$EXPECTED_INVOKER_NODES" ]; then
+  good "$NW node có nhãn openwhisk-role=invoker"
 else
-  warn "Master KHÔNG bị taint: pod OpenWhisk có thể chạy trên master (TAINT_MASTER=0?)"
+  bad "Chỉ $NW/$EXPECTED_INVOKER_NODES node có nhãn invoker (kubectl label node <tên> openwhisk-role=invoker)"
+fi
+if kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.taints[*].effect}{"\n"}{end}' | grep -q 'NoSchedule'; then
+  warn "Có node đang bị NoSchedule; workload sẽ không dùng được toàn bộ tài nguyên"
+else
+  good "Không có taint NoSchedule; server có thể chạy workload"
 fi
 
 log "4/6 StorageClass mặc định (cho PVC CouchDB/Kafka/ZooKeeper)..."
@@ -46,10 +51,10 @@ for ip in $(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=
 done
 ip -o link show flannel.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="mtu") print "   MTU flannel.1 =", $(i+1), "(kỳ vọng 1230)"}' || true
 
-log "6/6 Pod<->pod và DNS xuyên node (pod thử chạy ghim trên 2 worker)..."
-mapfile -t WORKERS < <(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+log "6/6 Pod<->pod và DNS xuyên node (pod thử chạy trên 2 node)..."
+mapfile -t WORKERS < <(kubectl get nodes -l openwhisk-role=invoker -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 if [ "${#WORKERS[@]}" -lt 2 ]; then
-  bad "Cần >= 2 worker để test xuyên node (đang có ${#WORKERS[@]})"
+  bad "Cần >= 2 node có nhãn invoker để test xuyên node (đang có ${#WORKERS[@]})"
 else
   cleanup() { kubectl delete pod nettest-0 nettest-1 --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
   trap cleanup EXIT

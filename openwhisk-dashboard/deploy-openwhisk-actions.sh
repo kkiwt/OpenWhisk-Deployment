@@ -2,9 +2,18 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  set -a
+  # Shared dashboard config also supplies DASHBOARD_URL to this deploy helper.
+  source "$SCRIPT_DIR/.env"
+  set +a
+fi
+
 DASHBOARD_URL="${DASHBOARD_URL:-}"
 SAMPLE_RATE="${SAMPLE_RATE:-0.05}"
 CLUSTERS="${CLUSTERS:-c1 c2 c3}"
+INGEST_TOKEN="${INGEST_TOKEN:-}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf 'Usage: DASHBOARD_URL=http://<dashboard-host>:9000 [CLUSTERS="c1 c2 c3"] [SAMPLE_RATE=0.05] %s\n' "$0"
@@ -54,7 +63,8 @@ for cluster in "${cluster_list[@]}"; do
   echo "Deploying dashboard publisher and A1/A2/A3 to $cluster..."
   WSK_CONFIG_FILE="$props" wsk -i action update publish_result \
     "$SCRIPT_DIR/actions/publish_result.py" --kind python:3 \
-    --param MODE dashboard --param TARGET_URL "$DASHBOARD_URL"
+    --param MODE dashboard --param TARGET_URL "$DASHBOARD_URL" \
+    --param INGEST_TOKEN "$INGEST_TOKEN"
 
   for action in A1 A2 A3; do
     case "$action" in
