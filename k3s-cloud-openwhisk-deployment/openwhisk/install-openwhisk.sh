@@ -10,6 +10,7 @@
 #    CHART_COMMIT=<sha>         (mặc định = commit đã pin trong repo)
 #    GOLDEN_LOCK=/đường/dẫn/golden.lock   (nếu có: so mã băm chart, bắt lệch phiên bản)
 #    RELEASE=owdev NS=openwhisk TIMEOUT=900 INVOKER_REPLICAS=2
+#    CLEANUP_STUCK_INSTALL_PACKAGES=1 (job tùy chọn, không cần cho action Python)
 # =====================================================================
 set -Eeuo pipefail
 trap 'echo "❌ Dừng ở dòng $LINENO (lệnh: $BASH_COMMAND)" >&2' ERR
@@ -27,9 +28,18 @@ CHART_DIR="$SRC_DIR/helm/openwhisk"
 VALUES="$SCRIPT_DIR/custom-values.yaml"
 GOLDEN_LOCK="${GOLDEN_LOCK:-}"
 PY_KINDS="${PY_KINDS:-python:3}"
+CLEANUP_STUCK_INSTALL_PACKAGES="${CLEANUP_STUCK_INSTALL_PACKAGES:-1}"
+CONTROLLER_LIVENESS_INITIAL_DELAY="${CONTROLLER_LIVENESS_INITIAL_DELAY:-60}"
+CONTROLLER_LIVENESS_FAILURE_THRESHOLD="${CONTROLLER_LIVENESS_FAILURE_THRESHOLD:-12}"
+CONTROLLER_READINESS_INITIAL_DELAY="${CONTROLLER_READINESS_INITIAL_DELAY:-30}"
+KAFKA_READINESS_TIMEOUT="${KAFKA_READINESS_TIMEOUT:-30}"
+KAFKA_READINESS_PERIOD="${KAFKA_READINESS_PERIOD:-15}"
+KAFKA_READINESS_FAILURE_THRESHOLD="${KAFKA_READINESS_FAILURE_THRESHOLD:-12}"
 
 [[ "$INVOKER_REPLICAS" =~ ^[1-9][0-9]*$ ]] \
   || die "INVOKER_REPLICAS phải là số nguyên dương"
+[[ "$CLEANUP_STUCK_INSTALL_PACKAGES" == "0" || "$CLEANUP_STUCK_INSTALL_PACKAGES" == "1" ]] \
+  || die "CLEANUP_STUCK_INSTALL_PACKAGES phải là 0 hoặc 1"
 
 # --- Ngân sách RAM (Mi) cho cụm 9GB (server 4GB + 2 agent 2.5GB) ---
 # Core request ~ 2304Mi; core limit ~ 4352Mi. LimitRange/ResourceQuota ở cấp namespace
@@ -118,6 +128,19 @@ cap kafka      "$KAFKA_LIMIT"      "$KAFKA_REQUEST"      "$KAFKA_CPU"     "KAFKA
 cap couchdb    "$COUCHDB_LIMIT"    "$COUCHDB_REQUEST"    "$COUCHDB_CPU"
 cap zookeeper  "$ZOOKEEPER_LIMIT"  "$ZOOKEEPER_REQUEST"  "$ZOOKEEPER_CPU" "JVMFLAGS=$ZOOKEEPER_HEAP"
 
+log "5a/7 Nới thời gian probe cho controller/Kafka trên node RAM nhỏ..."
+kubectl -n "$NS" patch "statefulset/${RELEASE}-controller" --type=json -p="[
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/initialDelaySeconds\",\"value\":${CONTROLLER_LIVENESS_INITIAL_DELAY}},
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/failureThreshold\",\"value\":${CONTROLLER_LIVENESS_FAILURE_THRESHOLD}},
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds\",\"value\":${CONTROLLER_READINESS_INITIAL_DELAY}}
+]" >/dev/null
+kubectl -n "$NS" patch "statefulset/${RELEASE}-kafka" --type=json -p="[
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/timeoutSeconds\",\"value\":${KAFKA_READINESS_TIMEOUT}},
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/periodSeconds\",\"value\":${KAFKA_READINESS_PERIOD}},
+  {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/failureThreshold\",\"value\":${KAFKA_READINESS_FAILURE_THRESHOLD}}
+]" >/dev/null
+ok "Đã nới probe: controller startup=${CONTROLLER_LIVENESS_INITIAL_DELAY}s, Kafka timeout=${KAFKA_READINESS_TIMEOUT}s"
+
 log "5b/7 Áp dụng giới hạn namespace cho workload..."
 kubectl -n "$NS" apply -f "$ROOT_DIR/k3s-resource-policy.yaml" >/dev/null
 ok "Đã giới hạn memory/cpu/pod trong namespace $NS"
@@ -139,6 +162,22 @@ while :; do
   if [ "$(date +%s)" -ge "$deadline" ]; then warn "Hết giờ chờ:"; echo "$BAD" | sed 's/^/     /'; break; fi
   sleep 10
 done
+
+PACKAGE_JOB="${RELEASE}-install-packages"
+PACKAGE_SUCCEEDED="$(kubectl -n "$NS" get job "$PACKAGE_JOB" \
+  -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
+if [ "$PACKAGE_SUCCEEDED" = "1" ]; then
+  ok "Job tùy chọn $PACKAGE_JOB đã hoàn thành"
+elif kubectl -n "$NS" get job "$PACKAGE_JOB" >/dev/null 2>&1; then
+  if [ "$CLEANUP_STUCK_INSTALL_PACKAGES" = "1" ]; then
+    warn "Job tùy chọn $PACKAGE_JOB chưa hoàn thành; dọn job để không giữ pod Init"
+    kubectl -n "$NS" delete job "$PACKAGE_JOB" --ignore-not-found >/dev/null
+    ok "Đã dọn job tùy chọn $PACKAGE_JOB (không ảnh hưởng action Python)"
+  else
+    warn "Job tùy chọn $PACKAGE_JOB chưa hoàn thành (đang giữ lại theo cấu hình)"
+  fi
+fi
+
 kubectl -n "$NS" get pods -o wide | awk 'NR==1 || /invoker|controller|couchdb|kafka|nginx/'
 INV_NODES="$(kubectl -n "$NS" get pods -l name="${RELEASE}-invoker" -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort -u | wc -l)"
 [ "$INV_NODES" -ge 2 ] && ok "Các invoker đã phân bổ trên $INV_NODES node khác nhau" || warn "Các invoker đang dồn trên $INV_NODES node (kiểm tra nhãn/affinity)"
@@ -192,5 +231,5 @@ done
 
 echo "============================================================"
 [ "$READY" -eq 1 ] && ok "OPENWHISK ĐÃ SẴN SÀNG TRÊN K3S" || warn "Cài xong nhưng còn pod chưa sẵn sàng"
-echo "👉 Bước tiếp: GATEWAY_URL=http://100.74.202.23:8080 DASHBOARD_URL=http://100.74.202.23:9000 CLUSTER_NAME=c1 ./actions/deploy-actions.sh"
+echo "👉 Bước tiếp: GATEWAY_URL=https://100.74.202.23:8080 DASHBOARD_URL=http://100.74.202.23:9000 CLUSTER_NAME=c1 ./actions/deploy-actions.sh"
 echo "============================================================"

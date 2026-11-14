@@ -20,4 +20,6 @@
 **/.env
 **/.env.*
 !**/.env.example
+**/gateway.crt
+**/gateway.key
 *.py[cod]

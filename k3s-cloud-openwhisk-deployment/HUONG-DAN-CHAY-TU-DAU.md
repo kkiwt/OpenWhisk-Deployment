@@ -339,7 +339,7 @@ Release "owdev" does not exist. Installing it now.
 ============================================================
 ✅ OPENWHISK ĐÃ SẴN SÀNG TRÊN K3S
 ```
-Kết quả cuối ở Terminal 2 (rút gọn): `owdev-controller-0`, `owdev-invoker-0/1`, `owdev-kafka-0`, `owdev-zookeeper-0`, `owdev-couchdb-…`, `owdev-nginx-…` đều `1/1 Running`; `owdev-init-couchdb-…` và `owdev-install-packages-…` là `Completed`. Bấm Ctrl+C.
+Kết quả cuối ở Terminal 2 (rút gọn): `owdev-controller-0`, `owdev-invoker-0/1`, `owdev-kafka-0`, `owdev-zookeeper-0`, `owdev-couchdb-…`, `owdev-nginx-…` đều `1/1 Running`; `owdev-init-couchdb-…` là `Completed`. Job tùy chọn `owdev-install-packages` sẽ là `Completed` hoặc được installer dọn nếu bị kẹt. Bấm Ctrl+C.
 
 ⚠️ Vài pod **restart 1–2 lần** ngay sau bước 5 là bình thường (đặt trần RAM làm StatefulSet khởi động lại).
 ⚠️ Không có `GOLDEN_LOCK` thì script chỉ cảnh báo, vẫn chạy (chỉ đối chiếu theo commit).

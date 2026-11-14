@@ -6,7 +6,7 @@
 #  code và KHÔNG phải restart Gateway: vòng ping 2 giây và cầu dao tự bao gồm c4 ngay.
 #
 #  Cách dùng (chạy ở máy có Gateway truy cập được):
-#     ./register-cloud-cluster.sh http://100.x.y.z:8080
+#     GATEWAY_TLS_INSECURE=1 ./register-cloud-cluster.sh https://100.x.y.z:8080
 #  Cần file gateway/.env.cloud do actions/deploy-actions.sh sinh ra.
 # =====================================================================
 set -Eeuo pipefail
@@ -14,10 +14,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATEWAY_URL="${1:-${GATEWAY_URL:-}}"
 CLUSTER_NAME="${CLUSTER_NAME:-c4}"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env.cloud}"
+GATEWAY_TLS_INSECURE="${GATEWAY_TLS_INSECURE:-0}"
 
 [ -n "$GATEWAY_URL" ] || { echo "Dùng: $0 http://<ip-tailscale-gateway>:8080"; exit 2; }
 [ -f "$ENV_FILE" ] || { echo "❌ Thiếu $ENV_FILE (chạy actions/deploy-actions.sh trước)"; exit 1; }
 GATEWAY_URL="${GATEWAY_URL%/}"
+if [ "$GATEWAY_TLS_INSECURE" = "1" ]; then
+  CURL_TLS_ARGS=(--insecure)
+else
+  CURL_TLS_ARGS=()
+fi
 VAR="$(echo "$CLUSTER_NAME" | tr '[:lower:]' '[:upper:]')"
 set -a; source "$ENV_FILE"; set +a
 URL_VAR="CLUSTER_${VAR}_URL"; AUTH_VAR="CLUSTER_${VAR}_AUTH_B64"
@@ -28,6 +34,7 @@ URL_VAR="CLUSTER_${VAR}_URL"; AUTH_VAR="CLUSTER_${VAR}_AUTH_B64"
 URL="${!URL_VAR}" AUTH="${!AUTH_VAR}" python3 -c \
   'import json,os; print(json.dumps({"url": os.environ["URL"], "auth": os.environ["AUTH"]}))' \
 | curl -fsS -X POST "$GATEWAY_URL/admin/clusters/$CLUSTER_NAME" \
+    "${CURL_TLS_ARGS[@]}" \
     -H 'Content-Type: application/json' --data-binary @-
 echo; echo "✅ Đã đăng ký [$CLUSTER_NAME]. Chờ vòng ping đầu tiên..."
 
@@ -37,7 +44,7 @@ echo; echo "✅ Đã đăng ký [$CLUSTER_NAME]. Chờ vòng ping đầu tiên..
 BAD=0
 for _ in $(seq 1 12); do
   sleep 2
-  STATE="$(curl -fsS "$GATEWAY_URL/admin/clusters" | NAME="$CLUSTER_NAME" python3 -c '
+  STATE="$(curl -fsS "${CURL_TLS_ARGS[@]}" "$GATEWAY_URL/admin/clusters" | NAME="$CLUSTER_NAME" python3 -c '
 import json, os, sys
 d = json.load(sys.stdin)["nodes"].get(os.environ["NAME"])
 print("missing" if d is None else "%s fails=%s" % ("up" if d["up"] else "down", d["fails"]))')"
