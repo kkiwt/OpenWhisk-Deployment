@@ -1,0 +1,119 @@
+# =====================================================================
+#  custom-values.yaml - OpenWhisk trên K3s VPC: server + các agent
+#
+#  Dùng tag image ổn định trong repo, không phụ thuộc Docker/k3d.
+#
+#  NGÂN SÁCH TÀI NGUYÊN: mọi node có thể chạy workload; quota cần điều chỉnh theo VPS thực tế.
+#  ResourceQuota/LimitRange giữ vùng an toàn sau khi trừ OS + containerd + k3s.
+#
+#     Thành phần              giới hạn pod   heap JVM   ghi chú
+#     controller x1           2048 Mi        1280 m     (đặt bằng install-openwhisk.sh)
+#     invoker x2              1536 Mi        768 m      mỗi invoker 1 worker
+#     kafka x1                1536 Mi        768 m
+#     zookeeper x1             512 Mi        256-384 m
+#     couchdb x1              1024 Mi        -
+#     nginx/redis/apigw/...   ~600 Mi        -
+#     action container        3 x 1024 Mi (userMemory) = tối đa 24 container x 128 Mi
+#     -> action runtime vẫn bị giới hạn để giữ headroom cho K3s và OpenWhisk.
+#  Trần RAM pod KHÔNG đặt được ở file này (chart không có khóa `resources` cho các
+#  thành phần lõi) nên do install-openwhisk.sh đặt ngay sau helm (kubectl set resources).
+# =====================================================================
+
+whisk:
+  ingress:
+    type: NodePort
+    # KHÁC MỖI CỤM: install-openwhisk.sh tự điền IP private của worker bằng --set.
+    # Giá trị này được bake vào cert của nginx và vào __OW_API_HOST của action
+    # (action tự gọi publish_result qua địa chỉ này), nên PHẢI là IP mà pod tới được.
+    apiHostName: ""
+    apiHostPort: 31001
+    apiHostProto: "https"
+
+  limits:
+    # Chart mặc định 60 lần/phút -> K6 dính 429 ngay. Giữ nguyên số của Golden Config.
+    actionsInvokesPerminute: 600000
+    actionsInvokesConcurrent: 5000
+    triggersFiresPerminute: 600000
+    actions:
+      memory:
+        std: "128m"          # RAM mặc định mỗi action. userMemory/std = số "chỗ" của invoker.
+
+  containerPool:
+    # TRẦN xếp chỗ cho action container của MỖI invoker (RAM thật dùng ít hơn nhiều).
+    # 1024m / 128m = 8 chỗ/invoker, 24 chỗ cả cụm. Đây là giới hạn bảo vệ cho
+    # agent 2.5GB; tăng userMemory chỉ khi đã đo được headroom thực tế.
+    userMemory: "1024m"
+
+# ---------------------------------------------------------------------
+# LƯU BỀN: giữ như Golden Config hiện tại của project (PVC bật).
+# K3s có sẵn StorageClass `local-path` làm mặc định -> không cần khai báo thêm.
+# CHÚ Ý riêng cho cụm thật: local-path tạo PV GẮN CỨNG vào node nơi pod chạy lần đầu.
+# Nếu worker chứa CouchDB/Kafka chết (kịch bản F2), pod KHÔNG thể sang worker kia mà phải
+# chờ node quay lại. Đó là hành vi đúng và nên ghi vào báo cáo F2 (khác k3d, nơi mọi
+# thứ cùng một máy vật lý).
+# ---------------------------------------------------------------------
+k8s:
+  persistence:
+    enabled: true
+    hasDefaultStorageClass: true
+    explicitStorageClass: null
+
+# ---------------------------------------------------------------------
+# GHIM PHIÊN BẢN: y hệt Golden Config (chart ghim riêng bằng commit trong install-openwhisk.sh)
+# ---------------------------------------------------------------------
+utility:
+  imageName: "openwhisk/ow-utils"
+  imageTag: "ef725a6"
+
+zookeeper:
+  imageName: "zookeeper"
+  imageTag: "3.4"
+
+kafka:
+  imageName: "wurstmeister/kafka"
+  imageTag: "2.12-2.3.1"
+
+db:
+  imageName: "apache/couchdb"
+  imageTag: "2.3"
+
+nginx:
+  imageName: "nginx"
+  imageTag: "1.21.1"
+  httpsNodePort: 31001          # cổng Gateway/NGINX gọi vào, mở trên MỌI node qua kube-proxy
+
+controller:
+  imageName: "openwhisk/controller"
+  imageTag: "ef725a6"
+  # Heap = ~62% trần pod 2048Mi: phần còn lại cho metaspace, thread, buffer Netty.
+  # Heap sát trần pod thì kernel OOM-kill container dù JVM chưa tràn heap.
+  jvmHeapMB: "1280"
+
+invoker:
+  imageName: "openwhisk/invoker"
+  imageTag: "ef725a6"
+  jvmHeapMB: "768"              # 50% trần pod 1536Mi: invoker còn tự quản lý nhiều kết nối tới action pod
+  containerFactory:
+    # K3s dùng containerd, không có docker.sock -> BẮT BUỘC dùng factory "kubernetes":
+    # invoker tạo mỗi action container thành một pod qua K8s API.
+    impl: "kubernetes"
+    kubernetes:
+      replicaCount: 2           # giá trị mặc định; installer sẽ ghi đè bằng INVOKER_REPLICAS
+  kubernetes:
+    replicaCount: 2             # giá trị mặc định; installer đặt đồng nhất với khóa bên trên
+
+apigw:
+  imageName: "openwhisk/apigateway"
+  imageTag: "1.0.0"
+
+redis:
+  imageName: "redis"
+  imageTag: "4.0"
+
+busybox:
+  imageName: "busybox"
+  imageTag: "1.36.1"
+
+# Không đặt affinity/tolerations: để mặc định của chart. Worker đã mang nhãn
+# openwhisk-role=invoker trên cả server và agent; thành phần lõi tự rải theo
+# preferred-affinity, không dành riêng server cho control-plane.

@@ -1,0 +1,31 @@
+# =====================================================================
+#  chaos-pod-kill.yaml - F1: invoker chết đột ngột (Chaos Mesh PodChaos)
+#
+#  Tương đương lệnh của chaos.sh trên k3d:
+#     kubectl -n openwhisk delete pod <invoker-pod> --force --grace-period=0
+#
+#  Chạy:     kubectl apply  -f tests/chaos-pod-kill.yaml
+#  Quan sát: kubectl -n openwhisk get pods -l name=owdev-invoker -w
+#  Dọn:      kubectl delete -f tests/chaos-pod-kill.yaml
+#
+#  Bản đồ F1-F5 cho cụm K3s thật (F3 delay: xem chaos-network-delay.yaml):
+#   F1 Chết pod       -> file này
+#   F2 Chết node      -> trên worker:  sudo k3s-killall.sh   (khôi phục: sudo systemctl start k3s-agent)
+#   F3 Đứt/trễ mạng   -> chaos-network-delay.yaml, hoặc từ máy Gateway: iptables DROP tới <ip-private-node>:31001
+#   F4 Chết cả cụm    -> dừng K3s trên các node theo thứ tự kiểm thử
+#   F5 Trạm nhận chết -> không đổi: đổi TARGET_URL của action publish_result sang địa chỉ chết
+# =====================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: f1-invoker-pod-kill
+  namespace: openwhisk
+spec:
+  action: pod-kill
+  mode: one                    # chọn ngẫu nhiên một invoker
+  # gracePeriod: 0 = SIGKILL ngay, không SIGTERM. Mô phỏng OOM-kill/crash thật: invoker không kịp
+  # báo controller là mình đi, nên controller chỉ biết qua health-ping -> đúng thứ cần đo.
+  gracePeriod: 0
+  selector:
+    labelSelectors:
+      name: owdev-invoker

@@ -1,0 +1,8 @@
+# Bí mật & file sinh ra lúc chạy: KHÔNG commit
+join.env
+*.env
+.env.*
+!.env.example
+gateway/ow-cloud-auth.conf
+kubeconfig*
+openwhisk-deploy-kube/

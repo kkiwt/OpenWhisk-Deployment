@@ -1,0 +1,39 @@
+# =====================================================================
+#  chaos-network-delay.yaml - F3 (biến thể "suy giảm", E4): trễ mạng giữa các thành phần OpenWhisk
+#
+#  Chạy:     kubectl apply  -f tests/chaos-network-delay.yaml     (tự hết sau `duration`)
+#  Dọn sớm:  kubectl delete -f tests/chaos-network-delay.yaml
+#  Khớp lịch run-chaos-exp.sh: 60s bình thường -> apply lúc t=60 -> giữ 120s -> tự gỡ -> 120s hồi phục.
+#
+#  TRUNG THỰC VỀ PHẠM VI: Chaos Mesh chèn `tc netem` vào interface eth0 CỦA POD. Nó làm chậm giao tiếp
+#  invoker <-> kafka/controller (đa số đi xuyên node, tức xuyên VPC/VXLAN) nhưng KHÔNG phân biệt
+#  được cặp pod cùng node, và KHÔNG chạm tới đường Gateway -> NodePort.
+#  Muốn làm chậm interface VPC giữa hai worker, chạy trực tiếp trên worker bị ảnh hưởng:
+#     sudo tc qdisc add dev <vpc-interface> root netem delay 150ms 30ms 25%
+#     sudo tc qdisc del dev <vpc-interface> root        # gỡ
+#  Kiểm tra bằng ping giữa 2 pod ở 2 node.
+# =====================================================================
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: f3-invoker-network-delay
+  namespace: openwhisk
+spec:
+  action: delay
+  mode: all
+  selector:                       # nguồn: các pod invoker
+    namespaces: [openwhisk]
+    labelSelectors:
+      name: owdev-invoker         # nếu pod không được chọn: kubectl -n openwhisk get pods --show-labels
+  direction: both                 # trễ cả chiều đi lẫn chiều về -> RTT cộng thêm ~2 x latency
+  target:                         # đích: Kafka (kênh invoker<->controller) và controller
+    mode: all
+    selector:
+      namespaces: [openwhisk]
+      expressionSelectors:
+        - { key: name, operator: In, values: [owdev-kafka, owdev-controller] }
+  delay:
+    latency: "150ms"              # cỡ độ trễ giữa 2 vùng địa lý xa; đổi 50ms / 150ms / 300ms để quét thang suy giảm
+    jitter: "30ms"                # biến thiên: mạng thật không bao giờ trễ đều tăm tắp
+    correlation: "25"             # % tương quan giữa các gói liên tiếp, tránh gói nhanh/chậm xen kẽ vô lý
+  duration: "120s"                # = HOLD mặc định của run-chaos-exp.sh
