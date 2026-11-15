@@ -61,7 +61,7 @@ for _ in $(seq 1 "$PARALLEL_REQUESTS"); do
   ) &
 done
 wait
-FAILED="$(grep -v '^200$' "$RESULTS" | wc -l)"
+FAILED="$(awk '$0 != "200" { count++ } END { print count+0 }' "$RESULTS")"
 [ "$FAILED" -eq 0 ] || die "$FAILED/$PARALLEL_REQUESTS request concurrency không trả HTTP 200"
 ok "Tất cả request concurrency trả HTTP 200"
 
