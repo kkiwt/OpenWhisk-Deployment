@@ -151,9 +151,18 @@ Khi deploy, cùng một code được tạo thành ba action độc lập:
 | `Group4_Action1` | Python 3 | 50 ms | workload nhẹ |
 | `Group4_Action2` | Python 3 | 200 ms | workload trung bình |
 | `Group4_Action3` | Python 3 | 500 ms | workload nặng |
-| `node-demo` | Node.js 18 | không busy loop | chứng minh đa runtime |
+| `node-demo` | Node.js 14 | không busy loop | chứng minh đa runtime |
 | `ping` | Python 3 | 10 ms | health/smoke check |
 | `node-info` | Python 3 | 10 ms | action telemetry nhẹ |
+
+### Lưu ý về Node.js runtime trên cloud
+
+Trong môi trường cloud của nhóm, image runtime Node.js 14 đã có sẵn từ lần
+cài OpenWhisk ban đầu, trước khi triển khai các action của video demo.
+File `actions/node_demo.js` chỉ dùng JavaScript cơ bản và tương thích với
+Node.js 14; response sẽ trả về `process.version` để xác nhận runtime thực tế.
+Khi deploy action, phải dùng `--kind nodejs:14` và kiểm tra image/runtime
+đang được chart pin hỗ trợ, không tự suy luận chỉ từ việc image đã được cache.
 
 Response Python có các trường:
 

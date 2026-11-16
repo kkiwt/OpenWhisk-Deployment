@@ -37,7 +37,7 @@ for spec in "Group4_Action1:0.05" "Group4_Action2:0.20" "Group4_Action3:0.50"; d
   "${WSK[@]}" action update "$name" "$DEMO_DIR/actions/demo_action.py" --kind python:3 \
     --param NAME "$name" --param GROUP "Group 4" --param BUSY "$busy" --param CLUSTER "$CLUSTER_NAME"
 done
-"${WSK[@]}" action update node-demo "$DEMO_DIR/actions/node_demo.js" --kind nodejs:18 \
+"${WSK[@]}" action update node-demo "$DEMO_DIR/actions/node_demo.js" --kind nodejs:14 \
   --param GROUP "Group 4" --param CLUSTER "$CLUSTER_NAME"
 
 AUTH_B64="$(printf '%s' "$AUTH" | base64 -w0)"
