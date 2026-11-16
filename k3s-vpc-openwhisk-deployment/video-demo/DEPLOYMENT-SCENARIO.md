@@ -398,8 +398,15 @@ Kết quả phải có:
 ### Cảnh 4 - Concurrency
 
 ```bash
-API_HOST=192.168.1.5 bash ./video-demo/run-demo.sh concurrency
+API_HOST=192.168.1.5 bash ./video-demo/run-demo.sh concurrency 2
+API_HOST=192.168.1.5 bash ./video-demo/run-demo.sh concurrency 8
+API_HOST=192.168.1.5 bash ./video-demo/run-demo.sh concurrency 12
 ```
+
+Mỗi lần chạy tạo `summary.json` và `metrics.csv` trong evidence. Các metric
+custom gồm tổng request, successful request, failed request và latency average,
+P90, P95. K6 chỉ thu thập và xuất số liệu; không tự kết luận hệ thống đạt
+ngưỡng hiệu năng.
 
 Hoặc chạy trực tiếp K6:
 
@@ -410,6 +417,8 @@ k6 run \
   -e SCENARIO=concurrency \
   -e RATE=8 \
   -e DURATION=60s \
+  --summary-export video-demo/evidence/k6-summary.json \
+  --out csv=video-demo/evidence/k6-metrics.csv \
   video-demo/tests/video-load.js
 ```
 
@@ -446,14 +455,18 @@ API_HOST=192.168.1.5 \
 Flow:
 
 1. Chọn Invoker đang chạy trên agent.
-2. Cordon node đó để scheduler không đặt pod mới vào.
-3. Xóa Invoker pod.
-4. StatefulSet/Deployment tạo pod thay thế.
-5. Kubernetes đặt pod thay thế trên node khác.
-6. Gọi `Group4_Action2`.
-7. Gửi 8 request `Group4_Action2` song song.
-8. Xác nhận 8/8 HTTP 200.
-9. Uncordon node cũ.
+2. Lưu tên, UID, node và Ready state của Invoker cũ.
+3. Đăng ký trap uncordon ngay sau khi xác định node.
+4. Cordon node đó để scheduler không đặt pod mới vào.
+5. Xóa Invoker pod cũ.
+6. Xác nhận UID cũ biến mất.
+7. StatefulSet/Deployment tạo pod replacement có UID mới.
+8. Chỉ chấp nhận replacement Running, Ready và nằm trên node khác.
+9. Ghi recovery time.
+10. Gọi `Group4_Action2`.
+11. Gửi 8 request `Group4_Action2` song song.
+12. Xác nhận 8/8 HTTP 200.
+13. Luôn uncordon node cũ.
 
 Đây là bằng chứng:
 
@@ -495,9 +508,13 @@ video-demo/evidence/
 Có thể chứa:
 
 - `nodes.txt`
+- `node-ip.txt`
 - `nodes-labels.txt`
+- `node-resources.txt`
 - `pods.txt`
 - `pods-all.txt`
+- `pod-placement.txt`
+- `pod-restarts.txt`
 - `pvc.txt`
 - `events.txt`
 - `top-nodes.txt`
@@ -506,6 +523,9 @@ Có thể chứa:
 - log từng Invoker
 - kết quả Prometheus query
 - log failover
+- JSON/CSV K6 của các mức 2/8/12 RPS
+
+Guest authentication và secret không được copy vào evidence snapshot.
 
 ### Prometheus/Grafana panels
 
@@ -534,6 +554,41 @@ T2: cordon/delete Invoker
 T3: Invoker mới Running
 T4: 8/8 request sau failover
 ```
+
+## Troubleshooting
+
+### K6 không chạy hoặc API không sẵn sàng
+
+```bash
+API_HOST=192.168.1.5 bash ./video-demo/run-demo.sh health
+k6 version
+```
+
+K6 nên chạy ngoài cluster. Nếu health fail, kiểm tra NodePort `31001`, route
+private VPC và certificate tự ký.
+
+### Không tìm thấy Invoker replacement
+
+```bash
+kubectl -n openwhisk get pods -l name=owdev-invoker -o wide
+kubectl get nodes --show-labels
+kubectl -n openwhisk get events --sort-by=.lastTimestamp
+```
+
+Phải còn một node khác Ready và không bị cordon. Script không coi Invoker
+replica còn lại là replacement.
+
+### Prometheus không có số liệu
+
+Đặt `PROMETHEUS_URL` tới Prometheus có thể truy cập từ máy chạy `kubectl` hoặc
+port-forward service Prometheus. Nếu không đặt URL, evidence sẽ ghi rõ rằng
+Prometheus API snapshot chưa được thu thập, không bịa số liệu thay thế.
+
+### Giới hạn failover
+
+`FAILOVER_MODE=invoker` kiểm tra Invoker pod recovery. `FAILOVER_MODE=node`
+thực hiện drain có kiểm soát và có thể ảnh hưởng pod stateful/PVC
+`local-path`; không dùng kết quả này để tuyên bố full data HA.
 
 ## 10. Kết quả mong đợi
 

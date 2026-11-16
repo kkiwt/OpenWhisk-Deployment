@@ -21,7 +21,7 @@ Kịch bản chứng minh:
 ## Mô hình phần cứng
 
 - 1 K3s server: khoảng 4 GB RAM, vừa control-plane vừa chạy workload.
-- 3 K3s agent: khoảng 2.5 GB RAM mỗi máy.
+- 3 K3s agent: 4 GB RAM mỗi máy, cùng cấu hình với server.
 - Khuyến nghị `INVOKER_REPLICAS=2` cho demo; có thể tăng lên 3 nếu còn headroom.
 - K6 chạy ngoài cluster để không cạnh tranh RAM với action.
 
@@ -137,16 +137,32 @@ curl -sk -u "$(cat video-demo/evidence/.guest-auth)" \
 ### Cảnh C - concurrency
 
 ```bash
-bash ./video-demo/run-demo.sh concurrency
+bash ./video-demo/run-demo.sh concurrency 2
+bash ./video-demo/run-demo.sh concurrency 8
+bash ./video-demo/run-demo.sh concurrency 12
 ```
 
-Hoặc chạy K6 từ máy có route tới private VPC:
+Ba mức này tương ứng 2, 8 và 12 RPS. Mỗi lần chạy tạo một thư mục evidence
+riêng gồm `summary.json` và `metrics.csv`. K6 chỉ thu thập số liệu, không tự
+kết luận hệ thống đạt hay không đạt hiệu năng.
+
+Hoặc chạy K6 trực tiếp từ máy có route tới private VPC:
 
 ```bash
 k6 run -e OW_API=https://<private-ip>:31001 \
   -e OW_AUTH="$(cat video-demo/evidence/.guest-auth)" -e SCENARIO=concurrency \
-  -e DURATION=60s video-demo/tests/video-load.js
+  -e RATE=8 -e DURATION=60s \
+  --summary-export video-demo/evidence/k6-summary.json \
+  --out csv=video-demo/evidence/k6-metrics.csv \
+  video-demo/tests/video-load.js
 ```
+
+Trong `summary.json`, các metric chính là:
+
+- `demo_requests_total`
+- `demo_requests_successful`
+- `demo_requests_failed`
+- `demo_latency_ms` với average, p90 và p95
 
 Trong Grafana mở dashboard node/pod và quay:
 
@@ -161,14 +177,19 @@ Trong Grafana mở dashboard node/pod và quay:
 Chạy trên cluster thử nghiệm:
 
 ```bash
-FAILOVER_MODE=invoker bash ./video-demo/failover-demo.sh
+FAILOVER_MODE=invoker API_HOST=<private-ip> \
+  bash ./video-demo/failover-demo.sh
 ```
 
-Script sẽ chọn node agent có Invoker, cordon node, xóa Invoker pod trên node
-đó, chờ pod mới lên node khác, gọi `Group4_Action2`, rồi chạy 8 request song song.
+Script lưu UID/node của Invoker cũ, đăng ký trap uncordon ngay sau khi xác định
+node, cordon node, xóa pod cũ và xác nhận UID cũ biến mất. Nó chỉ chấp nhận
+replacement có UID mới, Running, Ready và nằm trên node khác; replica còn lại
+không được tính là recovery. Sau đó script ghi recovery time, gọi
+`Group4_Action2` và kiểm tra 8/8 request song song.
+
 Đây là bằng chứng **Invoker rescheduling/action availability**, không phải
-cam kết full data HA cho CouchDB/Kafka. Cuối cùng script uncordon node và ghi
-bằng chứng.
+cam kết full data HA cho CouchDB/Kafka. Node luôn được uncordon khi script kết
+thúc, kể cả khi bước kiểm tra bị lỗi.
 
 Để mô phỏng drain worker mạnh hơn:
 
@@ -189,6 +210,19 @@ script lấy snapshot metric:
 PROMETHEUS_URL=http://<private-prometheus>:9090 \
   bash ./video-demo/collect-evidence.sh
 ```
+
+  Hoặc chạy toàn bộ health/evidence workflow:
+
+  ```bash
+  API_HOST=<private-ip> bash ./video-demo/run-demo.sh health
+  PROMETHEUS_URL=http://<private-prometheus>:9090 \
+    bash ./video-demo/run-demo.sh collect
+  ```
+
+  `collect-evidence.sh` tạo thư mục timestamp và thu node status/IP/labels/resource,
+  pod status/placement/restart, PVC, events, Invoker logs, Prometheus metrics,
+  failover logs và các JSON/CSV K6 trước đó. Guest authentication và secret
+  không được copy vào evidence snapshot.
 
 Nếu Prometheus nằm trong Kubernetes, có thể port-forward tạm thời:
 
@@ -217,3 +251,47 @@ bash ./openwhisk/uninstall-openwhisk.sh
 ```
 
 Không xóa cluster nếu còn cần giữ evidence trong Grafana.
+
+## 6. Troubleshooting
+
+### Không tìm thấy guest auth
+
+Chạy lại deploy action:
+
+```bash
+API_HOST=<private-ip> bash ./video-demo/deploy-demo.sh
+```
+
+Kiểm tra file local, không đưa file này vào Git:
+
+```bash
+test -s video-demo/evidence/.guest-auth
+```
+
+### K6 không chạy được
+
+K6 phải được cài trên máy chạy test, không nhất thiết trên VPS:
+
+```bash
+k6 version
+```
+
+Kiểm tra NodePort và API trước:
+
+```bash
+API_HOST=<private-ip> bash ./video-demo/run-demo.sh health
+```
+
+### Failover không tìm thấy replacement
+
+Kiểm tra:
+
+```bash
+kubectl -n openwhisk get pods -l name=owdev-invoker -o wide
+kubectl get nodes --show-labels
+kubectl -n openwhisk get events --sort-by=.lastTimestamp
+```
+
+Đảm bảo còn ít nhất một node khác Ready và không bị cordon. Nếu dùng
+`FAILOVER_MODE=node`, nhớ đây là test destructive trên cluster demo và có thể
+ảnh hưởng PVC `local-path`.
