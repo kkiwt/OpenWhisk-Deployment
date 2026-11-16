@@ -311,29 +311,33 @@ Phải kiểm tra được:
 - kubelet TCP `10250`;
 - pod-to-pod và DNS xuyên node.
 
-### Bước 5 - Deploy OpenWhisk và action
+### Bước 5 - Cài OpenWhisk một lần, rồi deploy action
 
-Trên `c1-server`:
+Nếu đây là cluster mới và OpenWhisk chưa được cài, trên `c1-server` chạy một
+lần:
 
 ```bash
 API_HOST=192.168.1.5 \
 INVOKER_REPLICAS=2 \
+  bash ./openwhisk/install-openwhisk.sh
+```
+
+Nếu OpenWhisk đã Running, không chạy installer lại. Dùng `deploy-demo.sh`:
+
+```bash
+API_HOST=192.168.1.5 \
   bash ./video-demo/deploy-demo.sh
 ```
 
-Script thực hiện:
+Script `deploy-demo.sh` chỉ:
 
-1. Gọi installer OpenWhisk VPC.
-2. Render Helm chart đã pin commit.
-3. Cấu hình NodePort HTTPS `31001`.
-4. Gỡ taint server để server được chạy workload.
-5. Cấu hình Invoker replica.
-6. Áp dụng resource cap và ResourceQuota.
-7. Preload Python và Node.js runtime.
-8. Tạo toàn bộ action Group 4.
-9. Gọi thử từng action.
-10. Lưu guest auth trong `video-demo/evidence/.guest-auth`.
-11. Thu snapshot node/pod/log/resource.
+1. Kiểm tra namespace, guest auth, NodePort `31001`, Invoker Ready và API.
+2. Tạo/update toàn bộ action Group 4.
+3. Gọi thử từng action.
+4. Lưu guest auth trong `video-demo/evidence/.guest-auth`.
+5. Thu snapshot node/pod/log/resource.
+
+Nó không gọi Helm, không đổi chart, không đổi K3s và không sửa PVC.
 
 ## 8. Quy trình chạy demo
 

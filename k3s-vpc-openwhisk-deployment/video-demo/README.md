@@ -49,7 +49,7 @@ Trên cả server và agent:
 
 ```bash
 ./scripts/00-install-linux-prerequisites.sh
-sudo VPC_CIDR=10.0.0.0/24 NODE_IP=<private-ip> \
+sudo VPC_CIDR=192.168.1.0/24 NODE_IP=<private-ip> \
   FLANNEL_IFACE=<vpc-interface> ./scripts/01-setup-vpc-network.sh
 ```
 
@@ -81,22 +81,30 @@ sudo NODE_IP=<agent-private-ip> FLANNEL_IFACE=<vpc-interface> \
 EXPECTED_NODES=4 EXPECTED_INVOKER_NODES=4 ./scripts/04-verify-cluster.sh
 ```
 
-## 2. Cài OpenWhisk và deploy action
+## 2. Cài OpenWhisk một lần, rồi deploy action
+
+Nếu OpenWhisk **chưa được cài** trên cluster mới, chạy installer một lần:
+
+```bash
+API_HOST=<private-ip-server-or-agent> \
+INVOKER_REPLICAS=2 \
+  bash ./openwhisk/install-openwhisk.sh
+```
+
+Nếu OpenWhisk đã chạy rồi, **không chạy installer lại**. `deploy-demo.sh` chỉ
+preflight cluster, deploy/update các Action Group 4 và thu evidence:
 
 Trên server, chạy:
 
 ```bash
 cd k3s-vpc-openwhisk-deployment
 API_HOST=<private-ip-server-or-agent> \
-INVOKER_REPLICAS=2 \
   bash ./video-demo/deploy-demo.sh
 ```
 
 Script sẽ:
 
-- cài OpenWhisk bằng cấu hình VPC hiện có và chart commit đã pin;
-- áp dụng giới hạn RAM/CPU phù hợp máy nhỏ;
-- preload Python và Node.js runtime;
+- kiểm tra namespace, guest auth, NodePort `31001`, Invoker Ready và API;
 - tạo `ping`, `node-info`, `Group4_Action1`, `Group4_Action2`,
   `Group4_Action3`, `node-demo`;
 - chạy smoke test;
