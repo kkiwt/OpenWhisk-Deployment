@@ -45,20 +45,3 @@ curl -k https://<private-ip-node>:31001/
 Installer mặc định chạy 2 invoker. Muốn đổi số lượng, đặt
 `INVOKER_REPLICAS=<số-lượng>`; không có yêu cầu cố định phải chạy 3 invoker.
 
-## 4. Kiểm chứng concurrency/failover
-
-```bash
-API_HOST=<private-ip-node> ./tests/validate-openwhisk.sh
-```
-
-Muốn mô phỏng mất một agent:
-
-```bash
-API_HOST=<private-ip-node> RUN_NODE_FAILOVER=1 \
-  ./tests/validate-openwhisk.sh
-```
-
-Chỉ chạy chế độ failover trên cluster thử nghiệm vì script sẽ cordon và drain
-một node. PVC `local-path` không tự sao chép dữ liệu sang node khác; muốn cam
-kết failover dữ liệu cần thêm storage phân tán/backup.
-
