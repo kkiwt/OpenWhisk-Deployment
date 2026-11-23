@@ -1,16 +1,29 @@
-```bash
+
 #!/usr/bin/env bash
 # =====================================================================
 # install-openwhisk.sh - Cài đặt OpenWhisk trên cụm K3s VPC
 #
 # Các bước:
-#   1. Kiểm tra môi trường và cấu hình node.
+#   1. Kiểm tra môi trường và vai trò các node.
 #   2. Tải và xác minh Helm chart.
 #   3. Kiểm tra cấu hình Helm.
 #   4. Triển khai OpenWhisk.
 #   5. Áp dụng giới hạn CPU/RAM và Probe.
 #   6. Áp dụng chính sách tài nguyên và chờ Pod sẵn sàng.
 #   7. Tải trước Python runtime và kiểm tra API.
+#
+# Topology:
+#   c1-server  : core
+#   c1-agent1  : invoker
+#   c1-agent2  : invoker
+#   c1-agent3  : invoker
+#
+# Cấu hình:
+#   Invoker    : 2 replica
+#   Kafka      : 1 broker
+#   ZooKeeper  : 1 replica
+#   Redis      : 1 replica
+#   CouchDB    : 1 replica
 #
 # Biến tùy chọn:
 #   API_HOST=<private-ip>
@@ -22,7 +35,8 @@
 #   TIMEOUT=900
 #   INVOKER_REPLICAS=2
 #   PY_KINDS=python:3
-#   CLEANUP_STUCK_INSTALL_PACKAGES=1
+#   ALLOW_EXISTING_RELEASE_UPGRADE=0
+#   CLEANUP_STUCK_INSTALL_PACKAGES=0
 # =====================================================================
 
 set -Eeuo pipefail
@@ -49,38 +63,23 @@ CHART_COMMIT="${CHART_COMMIT:-146d24925564e2871f4cc6506d4e92098968457d}"
 
 SRC_DIR="${SRC_DIR:-$ROOT_DIR/openwhisk-deploy-kube}"
 CHART_DIR="$SRC_DIR/helm/openwhisk"
+
 VALUES="$SCRIPT_DIR/custom-values.yaml"
+RESOURCE_POLICY="$ROOT_DIR/k3s-resource-policy.yaml"
 
 GOLDEN_LOCK="${GOLDEN_LOCK:-}"
 
 API_PORT="${API_PORT:-31001}"
 
 PY_KINDS="${PY_KINDS:-python:3}"
-CLEANUP_STUCK_INSTALL_PACKAGES="${CLEANUP_STUCK_INSTALL_PACKAGES:-1}"
+
+ALLOW_EXISTING_RELEASE_UPGRADE="${ALLOW_EXISTING_RELEASE_UPGRADE:-0}"
+CLEANUP_STUCK_INSTALL_PACKAGES="${CLEANUP_STUCK_INSTALL_PACKAGES:-0}"
 
 PRELOAD_DS="preload-python-runtime"
 
-CONTROLLER_LIVENESS_INITIAL_DELAY=60
-CONTROLLER_LIVENESS_FAILURE_THRESHOLD=12
-CONTROLLER_READINESS_INITIAL_DELAY=30
-
-KAFKA_READINESS_TIMEOUT=30
-KAFKA_READINESS_PERIOD=15
-KAFKA_READINESS_FAILURE_THRESHOLD=12
-
 # ---------------------------------------------------------------------
 # 2. Ngân sách tài nguyên
-#
-# Tuân theo LimitRange:
-#   RAM tối đa/container: 2048Mi
-#   CPU tối đa/container: 1000m
-#
-# Tuân theo ResourceQuota:
-#   RAM requests: 10Gi
-#   RAM limits:   16Gi
-#   CPU requests: 8
-#   CPU limits:   20
-#   Pods:         60
 # ---------------------------------------------------------------------
 
 CONTROLLER_LIMIT=1280
@@ -111,7 +110,7 @@ ZOOKEEPER_CPU_LIMIT=500m
 ZOOKEEPER_HEAP="-Xms128m -Xmx256m"
 
 # ---------------------------------------------------------------------
-# 3. Kiểm tra tham số và file cấu hình
+# 3. Tham số và file cấu hình
 # ---------------------------------------------------------------------
 
 [[ "$INVOKER_REPLICAS" =~ ^[1-9][0-9]*$ ]] \
@@ -120,37 +119,41 @@ ZOOKEEPER_HEAP="-Xms128m -Xmx256m"
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
   || die "TIMEOUT phải là số nguyên dương"
 
+[[ "$API_PORT" =~ ^[0-9]+$ ]] \
+  || die "API_PORT không hợp lệ"
+
+[[ "$ALLOW_EXISTING_RELEASE_UPGRADE" == "0" || \
+   "$ALLOW_EXISTING_RELEASE_UPGRADE" == "1" ]] \
+  || die "ALLOW_EXISTING_RELEASE_UPGRADE chỉ nhận 0 hoặc 1"
+
 [[ "$CLEANUP_STUCK_INSTALL_PACKAGES" == "0" || \
    "$CLEANUP_STUCK_INSTALL_PACKAGES" == "1" ]] \
   || die "CLEANUP_STUCK_INSTALL_PACKAGES chỉ nhận 0 hoặc 1"
 
-[[ "$API_PORT" =~ ^[0-9]+$ ]] \
-  || die "API_PORT không hợp lệ"
-
 [[ -f "$VALUES" ]] \
   || die "Không tìm thấy custom-values.yaml: $VALUES"
-
-RESOURCE_POLICY="$ROOT_DIR/k3s-resource-policy.yaml"
 
 [[ -f "$RESOURCE_POLICY" ]] \
   || die "Không tìm thấy k3s-resource-policy.yaml"
 
 # ---------------------------------------------------------------------
-# Bước 1: Kiểm tra môi trường và cấu hình node
+# Bước 1: Kiểm tra môi trường và vai trò node
 # ---------------------------------------------------------------------
 
-log "1/7 Kiểm tra môi trường và cấu hình node..."
+log "1/7 Kiểm tra môi trường và vai trò node..."
 
 for c in kubectl git python3 curl sha256sum awk grep sort; do
   need_cmd "$c"
 done
 
 if ! command -v helm >/dev/null 2>&1; then
+
   log "Cài đặt Helm..."
 
   curl -fsSL \
     https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
     | sudo bash
+
 fi
 
 need_cmd helm
@@ -160,56 +163,45 @@ kubectl get nodes >/dev/null 2>&1 \
 
 kubectl get nodes -o wide
 
-# Tìm Server theo nhãn control-plane.
-MASTER_NODE="$(
-  kubectl get nodes \
-    -l node-role.kubernetes.io/control-plane \
-    -o name 2>/dev/null | head -n 1
+# Kiểm tra node Server.
+SERVER_NODE="${SERVER_NODE:-c1-server}"
+
+kubectl get node "$SERVER_NODE" >/dev/null 2>&1 \
+  || die "Không tìm thấy Server $SERVER_NODE"
+
+SERVER_ROLE="$(
+  kubectl get node "$SERVER_NODE" \
+    -o jsonpath='{.metadata.labels.openwhisk-role}'
 )"
 
-if [ -z "$MASTER_NODE" ]; then
-  MASTER_NODE="$(
-    kubectl get nodes \
-      -l node-role.kubernetes.io/master \
-      -o name 2>/dev/null | head -n 1
-  )"
-fi
+[ "$SERVER_ROLE" = "core" ] \
+  || die "$SERVER_NODE phải mang nhãn openwhisk-role=core"
 
-# Mở khóa Server để có thể chạy workload.
-if [ -n "$MASTER_NODE" ]; then
+ok "$SERVER_NODE được giữ ở vai trò core"
 
-  kubectl taint nodes "$MASTER_NODE" \
-    node-role.kubernetes.io/master:NoSchedule- \
-    >/dev/null 2>&1 || true
-
-  kubectl taint nodes "$MASTER_NODE" \
-    node-role.kubernetes.io/control-plane:NoSchedule- \
-    >/dev/null 2>&1 || true
-
-  kubectl label "$MASTER_NODE" \
-    openwhisk-role=invoker \
-    --overwrite >/dev/null
-
-  ok "Đã mở khóa $MASTER_NODE để chia sẻ workload"
-
-else
-  warn "Không tìm thấy node Server theo nhãn control-plane/master"
-fi
-
-INVOKER_NODE_COUNT="$(
+# Kiểm tra các worker.
+INVOKER_NODES="$(
   kubectl get nodes \
     -l openwhisk-role=invoker \
-    --no-headers | wc -l
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+)"
+
+INVOKER_NODE_COUNT="$(
+  printf '%s\n' "$INVOKER_NODES" | grep -c . || true
 )"
 
 [ "$INVOKER_NODE_COUNT" -ge 1 ] \
-  || die "Không có node mang nhãn openwhisk-role=invoker"
+  || die "Không có worker mang nhãn openwhisk-role=invoker"
 
 if [ "$INVOKER_REPLICAS" -gt "$INVOKER_NODE_COUNT" ]; then
-  warn "Số Invoker ban đầu lớn hơn số node được gắn nhãn"
+  warn "Số Invoker lớn hơn số worker được gắn nhãn"
 fi
 
-ok "Có $INVOKER_NODE_COUNT node được phép chạy Invoker"
+ok "Có $INVOKER_NODE_COUNT worker dành cho Invoker"
+
+echo
+echo "Các worker được phép chạy Invoker:"
+printf '%s\n' "$INVOKER_NODES"
 
 # Kiểm tra StorageClass mặc định.
 kubectl get storageclass \
@@ -226,6 +218,25 @@ API_HOST="${API_HOST:-$(ow_api_host)}"
 
 ok "API Host: $API_HOST"
 
+# Kiểm tra release hiện có.
+if helm status "$RELEASE" -n "$NS" >/dev/null 2>&1; then
+
+  if [ "$ALLOW_EXISTING_RELEASE_UPGRADE" != "1" ]; then
+
+    die "Release $RELEASE đã tồn tại. Không tự động upgrade. Nếu đã kiểm tra chart và muốn nâng cấp, đặt ALLOW_EXISTING_RELEASE_UPGRADE=1"
+
+  fi
+
+  EXISTING_RELEASE=1
+
+  warn "Đã xác nhận cho phép upgrade release hiện có"
+
+else
+
+  EXISTING_RELEASE=0
+
+fi
+
 # ---------------------------------------------------------------------
 # Bước 2: Tải và xác minh Helm chart
 # ---------------------------------------------------------------------
@@ -239,20 +250,24 @@ if [ ! -d "$SRC_DIR/.git" ]; then
 
   git clone "$CHART_REPO" "$SRC_DIR"
 
+else
+
+  if [ -n "$(git -C "$SRC_DIR" status --porcelain)" ]; then
+    die "Git repository có thay đổi chưa commit. Không tự động ghi đè."
+  fi
+
 fi
+
+git -C "$SRC_DIR" fetch origin \
+  || die "Không thể cập nhật Git repository"
+
+git -C "$SRC_DIR" cat-file -e "${CHART_COMMIT}^{commit}" \
+  || die "Không tìm thấy commit $CHART_COMMIT"
 
 CURRENT_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD)"
 
 if [ "$CURRENT_COMMIT" != "$CHART_COMMIT" ]; then
-
-  git -C "$SRC_DIR" fetch origin \
-    || die "Không thể cập nhật Git repository"
-
-  git -C "$SRC_DIR" cat-file -e "${CHART_COMMIT}^{commit}" \
-    || die "Không tìm thấy commit $CHART_COMMIT"
-
   git -C "$SRC_DIR" checkout --detach "$CHART_COMMIT"
-
 fi
 
 ACTUAL_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD)"
@@ -302,7 +317,9 @@ if [ -n "$GOLDEN_LOCK" ]; then
   ok "Helm chart khớp golden.lock"
 
 else
+
   warn "Không sử dụng GOLDEN_LOCK"
+
 fi
 
 # ---------------------------------------------------------------------
@@ -315,6 +332,8 @@ HELM_SET_ARGS=(
   --set "whisk.ingress.apiHostName=$API_HOST"
   --set "invoker.containerFactory.kubernetes.replicaCount=$INVOKER_REPLICAS"
   --set "invoker.kubernetes.replicaCount=$INVOKER_REPLICAS"
+  --set "kafka.replicaCount=1"
+  --set "zookeeper.replicaCount=1"
 )
 
 if ! RENDER="$(
@@ -329,6 +348,32 @@ if ! RENDER="$(
 
 fi
 
+# Kiểm tra số replica trong bản render.
+for COMPONENT in kafka zookeeper; do
+
+  REPLICAS="$(
+    awk -v target="${RELEASE}-${COMPONENT}" '
+      $1 == "kind:" && $2 == "StatefulSet" {
+        found = 0
+      }
+      $1 == "name:" && $2 == target {
+        found = 1
+      }
+      found && $1 == "replicas:" {
+        print $2
+        exit
+      }
+    ' <<< "$RENDER"
+  )"
+
+  [ "$REPLICAS" = "1" ] \
+    || die "$COMPONENT không được cấu hình đúng 1 replica"
+
+  ok "$COMPONENT: 1 replica"
+
+done
+
+# Kiểm tra giá trị cấu hình quan trọng.
 for VALUE in 600000 1024m ef725a6; do
 
   if grep -q -- "$VALUE" <<< "$RENDER"; then
@@ -351,10 +396,22 @@ kubectl create namespace "$NS" \
   --dry-run=client -o yaml \
   | kubectl apply -f - >/dev/null
 
-helm upgrade --install "$RELEASE" "$CHART_DIR" \
-  -n "$NS" \
-  -f "$VALUES" \
-  "${HELM_SET_ARGS[@]}"
+if [ "$EXISTING_RELEASE" = "1" ]; then
+
+  helm upgrade "$RELEASE" "$CHART_DIR" \
+    -n "$NS" \
+    -f "$VALUES" \
+    --reuse-values \
+    "${HELM_SET_ARGS[@]}"
+
+else
+
+  helm install "$RELEASE" "$CHART_DIR" \
+    -n "$NS" \
+    -f "$VALUES" \
+    "${HELM_SET_ARGS[@]}"
+
+fi
 
 ok "Helm triển khai hoàn tất"
 
@@ -436,13 +493,15 @@ if kubectl -n "$NS" get sts "$CONTROLLER_STS" >/dev/null 2>&1; then
   kubectl -n "$NS" patch "sts/$CONTROLLER_STS" \
     --type=json \
     -p="[
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/initialDelaySeconds\",\"value\":$CONTROLLER_LIVENESS_INITIAL_DELAY},
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/failureThreshold\",\"value\":$CONTROLLER_LIVENESS_FAILURE_THRESHOLD},
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds\",\"value\":$CONTROLLER_READINESS_INITIAL_DELAY}
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/initialDelaySeconds\",\"value\":60},
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/livenessProbe/failureThreshold\",\"value\":12},
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/initialDelaySeconds\",\"value\":30}
     ]" >/dev/null
 
 else
+
   warn "Không tìm thấy Controller StatefulSet để điều chỉnh Probe"
+
 fi
 
 if kubectl -n "$NS" get sts "$KAFKA_STS" >/dev/null 2>&1; then
@@ -450,19 +509,21 @@ if kubectl -n "$NS" get sts "$KAFKA_STS" >/dev/null 2>&1; then
   kubectl -n "$NS" patch "sts/$KAFKA_STS" \
     --type=json \
     -p="[
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/timeoutSeconds\",\"value\":$KAFKA_READINESS_TIMEOUT},
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/periodSeconds\",\"value\":$KAFKA_READINESS_PERIOD},
-      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/failureThreshold\",\"value\":$KAFKA_READINESS_FAILURE_THRESHOLD}
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/timeoutSeconds\",\"value\":30},
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/periodSeconds\",\"value\":15},
+      {\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/failureThreshold\",\"value\":12}
     ]" >/dev/null
 
 else
+
   warn "Không tìm thấy Kafka StatefulSet để điều chỉnh Probe"
+
 fi
 
 ok "Đã xử lý cấu hình Probe"
 
 # ---------------------------------------------------------------------
-# Bước 6: Áp dụng LimitRange, ResourceQuota và HPA
+# Bước 6: Áp dụng chính sách tài nguyên
 # ---------------------------------------------------------------------
 
 log "6/7 Áp dụng chính sách tài nguyên..."
@@ -471,7 +532,6 @@ kubectl -n "$NS" apply -f "$RESOURCE_POLICY"
 
 ok "Đã áp dụng LimitRange, ResourceQuota và HPA"
 
-# Kiểm tra HPA.
 if kubectl -n "$NS" get hpa "${RELEASE}-invoker-hpa" >/dev/null 2>&1; then
 
   kubectl -n "$NS" get hpa "${RELEASE}-invoker-hpa"
@@ -479,12 +539,13 @@ if kubectl -n "$NS" get hpa "${RELEASE}-invoker-hpa" >/dev/null 2>&1; then
   ok "Đã cấu hình HPA cho Invoker"
 
 else
-  warn "Không tìm thấy HPA ${RELEASE}-invoker-hpa trong resource policy"
+
+  warn "Không tìm thấy HPA ${RELEASE}-invoker-hpa"
+
 fi
 
 # ---------------------------------------------------------------------
-# Chờ Pod sẵn sàng.
-# Không coi Pod Running nhưng chưa Ready là đã sẵn sàng.
+# Chờ Pod sẵn sàng
 # ---------------------------------------------------------------------
 
 log "Chờ các Pod sẵn sàng..."
@@ -519,12 +580,13 @@ for pod in data.get("items", []):
     if pod["metadata"].get("deletionTimestamp"):
         continue
 
-    if phase in ("Succeeded",):
+    if phase == "Succeeded":
         continue
 
     total += 1
 
     conditions = pod.get("status", {}).get("conditions", [])
+
     ready = any(
         c.get("type") == "Ready" and c.get("status") == "True"
         for c in conditions
@@ -542,14 +604,14 @@ print("\n".join(pending))
   TOTAL="$(head -n 1 <<< "$POD_STATUS")"
   PENDING="$(tail -n +2 <<< "$POD_STATUS")"
 
-  if [ -z "$TOTAL" ]; then
-    TOTAL=0
-  fi
+  TOTAL="${TOTAL:-0}"
 
   if [ "$TOTAL" -gt 0 ] && [ -z "$PENDING" ]; then
+
     READY=1
     ok "Các Pod chính đã sẵn sàng"
     break
+
   fi
 
   if [ "$PENDING" != "$LAST_STATUS" ]; then
@@ -561,19 +623,21 @@ print("\n".join(pending))
     fi
 
     LAST_STATUS="$PENDING"
+
   fi
 
   if [ "$(date +%s)" -ge "$deadline" ]; then
+
     warn "Hết thời gian chờ Pod"
     break
+
   fi
 
   sleep 10
 
 done
 
-
-
+# Kiểm tra Job cài package.
 PACKAGE_JOB="${RELEASE}-install-packages"
 
 PACKAGE_SUCCEEDED="$(
@@ -594,23 +658,22 @@ elif kubectl -n "$NS" get job "$PACKAGE_JOB" >/dev/null 2>&1; then
     kubectl -n "$NS" delete job "$PACKAGE_JOB" \
       --ignore-not-found >/dev/null
 
-    ok "Đã dọn Job tùy chọn"
-
   else
 
-    warn "Giữ lại Job cài package"
+    warn "Giữ lại Job cài package để kiểm tra"
 
   fi
 
 fi
 
-
+# Hiển thị trạng thái workload.
 echo
 echo "Trạng thái các thành phần:"
 
 kubectl -n "$NS" get pods -o wide \
-  | awk 'NR==1 || /invoker|controller|couchdb|kafka|nginx/'
+  | awk 'NR==1 || /invoker|controller|couchdb|kafka|zookeeper|nginx/'
 
+# Kiểm tra số Invoker Ready.
 INV_STS="${RELEASE}-invoker"
 
 INV_DESIRED="$(
@@ -626,13 +689,18 @@ INV_READY="$(
 INV_DESIRED="${INV_DESIRED:-0}"
 INV_READY="${INV_READY:-0}"
 
-if [ "$INV_READY" -ge 2 ]; then
+if [ "$INV_READY" -ge "$INVOKER_REPLICAS" ]; then
+
   ok "Invoker Ready: $INV_READY/$INV_DESIRED"
+
 else
-  warn "Invoker chưa đủ 2 replica Ready: $INV_READY/$INV_DESIRED"
+
+  warn "Invoker chưa đủ replica Ready: $INV_READY/$INV_DESIRED"
   READY=0
+
 fi
 
+# Kiểm tra Invoker được phân bố trên nhiều worker.
 INV_NODES="$(
   kubectl -n "$NS" get pods \
     -l name="${RELEASE}-invoker" \
@@ -643,9 +711,13 @@ INV_NODES="$(
 )"
 
 if [ "$INV_NODES" -ge 2 ]; then
+
   ok "Invoker được phân bổ trên $INV_NODES node"
+
 else
+
   warn "Invoker hiện phân bổ trên $INV_NODES node"
+
 fi
 
 # ---------------------------------------------------------------------
@@ -686,7 +758,6 @@ print("\n".join(seen))
 PY
 )"
 
-# Hàm dọn DaemonSet preload.
 cleanup_preload() {
   kubectl -n "$NS" delete ds "$PRELOAD_DS" \
     --ignore-not-found >/dev/null 2>&1 || true
@@ -754,6 +825,9 @@ fi
 cleanup_preload
 trap - EXIT
 
+# ---------------------------------------------------------------------
+# Kiểm tra API
+# ---------------------------------------------------------------------
 
 log "Kiểm tra API OpenWhisk..."
 
@@ -777,16 +851,36 @@ for _ in $(seq 1 18); do
 done
 
 if [ "$CODE" = "200" ]; then
+
   ok "API OpenWhisk trả HTTP 200"
+
 else
+
   warn "API chưa trả HTTP 200 (mã $CODE)"
+
 fi
 
+# ---------------------------------------------------------------------
+# Tổng kết
+# ---------------------------------------------------------------------
 
+echo
+echo "============================================================"
+echo "                 KẾT QUẢ TRIỂN KHAI"
+echo "============================================================"
 
+kubectl get nodes -o wide
+
+kubectl -n "$NS" get pods -o wide
+
+echo
 
 if [ "$READY" -eq 1 ] && [ "$CODE" = "200" ]; then
+
   ok "OPENWHISK ĐÃ SẴN SÀNG TRÊN K3S"
+
 else
-    warn "OPENWHISK CHƯA SẴN SÀNG TRÊN K3S"
+
+  warn "OPENWHISK CHƯA SẴN SÀNG TRÊN K3S"
+
 fi
