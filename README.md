@@ -37,13 +37,12 @@ Client
 
 | Node | Private IP ghi nhận | Vai trò |
 |---|---:|---|
-| `c1-server` | `192.168.1.5` | K3s control-plane và workload |
-| `c1-agent1` | `192.168.1.102` | K3s worker/Invoker |
-| `c1-agent2` | `192.168.1.46` | K3s worker/Invoker |
-| `c1-agent3` | `192.168.1.242` | K3s worker/Invoker |
+| `server` | `192.168.1.5` | K3s control-plane và workload |
+| `agent1` | `192.168.1.102` | K3s worker/Invoker |
+| `agent2` | `192.168.1.46` | K3s worker/Invoker |
+| `agent3` | `192.168.1.242` | K3s worker/Invoker |
 
-Các địa chỉ, interface và trạng thái node là thông tin snapshot. Trước khi
-deploy, luôn xác nhận bằng `kubectl`, `ip -br addr` và `ip route`.
+
 
 ## Cấu hình chính
 
