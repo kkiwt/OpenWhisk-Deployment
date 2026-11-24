@@ -1,15 +1,32 @@
 # Apache OpenWhisk trên K3s Private VPC
 
-Repository thống nhất cho bài triển khai Apache OpenWhisk trên cụm K3s
-private VPC gồm 1 server và 3 agent. Cấu hình chính được đối chiếu với snapshot
-`kubectl`/tài liệu Word đã thu thập; repository không thay đổi cluster đang chạy
-và không khẳng định trạng thái live hiện tại.
+Repository thống nhất cho bài triển khai Apache OpenWhisk trên cụm K3s private VPC gồm 1 server và 3 agent.
+
+Cấu hình chính được đối chiếu với snapshot `kubectl` và tài liệu báo cáo đã thu thập; repository không thay đổi cluster đang chạy và không khẳng định trạng thái live hiện tại.
+
+## Thông tin đồ án & Nhóm thực hiện
+
+- **Đề tài:** Triển khai Apache OpenWhisk (FaaS) trên cụm K3s
+- **Môn học:** NT533.R11 – Hệ tính toán phân bố (Khoa Mạng máy tính và Truyền thông – UIT, ĐHQG-HCM)
+- **Giảng viên hướng dẫn:** ThS. Bùi Thanh Bình
+- **Thời gian thực hiện:** 19/10/2026 – 24/11/2026
+- **Tài nguyên đính kèm:** [Slide & Video Demo (Google Drive)](https://drive.google.com/drive/folders/1p7qtjHbbh17_ExblE2Q9gG1A46oyFwal?usp=sharing)
+
+### Thành viên Nhóm 4
+
+| STT | Họ và tên | MSSV | Vai trò |
+|---:|---|---|---|
+| 1 | Nguyễn Tuấn Kiệt | `24520907` | Trưởng nhóm |
+| 2 | Võ Minh Kiệt | `24520918` | Thành viên |
+| 3 | Trương Tấn Kiệt | `24520917` | Thành viên |
+
+---
 
 ## Kiến trúc triển khai
 
 ```text
 Client
-  -> OpenWhisk NodePort :31001
+  -> NGINX Edge Gateway (:8081) [tùy chọn] / OpenWhisk NodePort (:31001)
   -> OpenWhisk Controller
   -> Kafka
   -> Invoker
