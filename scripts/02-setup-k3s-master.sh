@@ -77,7 +77,7 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml k3s kubectl get nodes -o wide || die "API server không trả lời. Xem: journalctl -u k3s -n 50"
-KUBECONFIG=/etc/rancher/k3s/k3s.yaml k3s kubectl label node "$NODE_NAME" openwhisk-role=invoker --overwrite >/dev/null
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml k3s kubectl label node "$NODE_NAME" openwhisk-role=core --overwrite >/dev/null
 ok "Master Ready"
 
 # --- K3S_TOKEN + lệnh join cho worker -------------------------------------------------
@@ -99,13 +99,3 @@ sed -E "s#(server: https://)[^:]+(:6443)#\1${NODE_IP}\2#" /etc/rancher/k3s/k3s.y
 chmod 600 "$TARGET_HOME/.kube/config"
 chown -R "$TARGET_USER:" "$TARGET_HOME/.kube"
 
-echo "============================================================"
-ok "K3s master sẵn sàng. API: https://${NODE_IP}:6443"
-echo "   K3S_TOKEN đã lưu (chmod 600) tại: $JOIN_ENV"
-echo
-echo "👉 Trên MỖI worker (sau khi chạy 01-setup-vpc-network.sh), chạy:"
-echo "   sudo K3S_URL=https://${NODE_IP}:6443 K3S_TOKEN='<nội dung trong join.env>' \\"
-echo "        NODE_NAME=k3s-cloud-w1 ./scripts/03-setup-k3s-worker.sh"
-echo "   (hoặc chép join.env vào thư mục gốc repo trên worker: script tự đọc)"
-echo "👉 K3S_TOKEN = chìa khóa join cụm: không dán vào chat/commit lên git."
-echo "============================================================"

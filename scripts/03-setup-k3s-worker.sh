@@ -56,7 +56,3 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" \
 for _ in $(seq 1 30); do systemctl is-active --quiet k3s-agent && break; sleep 2; done
 systemctl is-active --quiet k3s-agent || die "k3s-agent không chạy. Xem: journalctl -u k3s-agent -n 50"
 
-echo "============================================================"
-ok "Worker ${NODE_NAME} đã gửi yêu cầu join."
-echo "👉 Trên MASTER chạy: ./scripts/04-verify-cluster.sh  (sau khi các agent đã join)"
-echo "============================================================"
